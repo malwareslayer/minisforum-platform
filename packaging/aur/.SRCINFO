@@ -6,6 +6,8 @@ pkgbase = minisforum-platform-dkms
 	arch = x86_64
 	license = GPL-2.0-or-later
 	depends = dkms
+	provides = minisforum_platform
+	conflicts = minisforum_platform
 	source = https://github.com/malwareslayer/minisforum-platform/releases/download/v0.2/minisforum-platform-v0.2.tar.gz
 	sha256sums = 78683b442250c278670e7a5cd8a4e4f603cba3be403b1b331bd83cc51a581faa
 
