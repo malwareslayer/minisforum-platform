@@ -51,47 +51,97 @@ static bool mf_detect_amd_pstate(void)
 		strncmp(driver, "amd_pstate", 10) == 0);
 }
 
+static u64 mf_get_max_highest_perf(void)
+{
+	u64 max_perf = 0;
+	int cpu;
+
+	for_each_online_cpu(cpu) {
+		u64 perf = 0;
+
+		if (cppc_get_highest_perf(cpu, &perf) == 0 && perf > max_perf)
+			max_perf = perf;
+	}
+
+	return max_perf;
+}
+
 /* Apply frequency constraints and energy performance preference */
 static void mf_apply_profile_qos(struct minisforum_data *data,
 				 enum platform_profile_option profile)
 {
-	unsigned int target_min, target_max;
-	const char *target_epp_str;
-	u64 target_epp;
+	u64 max_perf;
 	int cpu;
 
 	if (!data->qos_initialized || !manage_cpufreq || !data->has_amd_pstate)
 		return;
 
-	switch (profile) {
-	case PLATFORM_PROFILE_LOW_POWER:
-		target_min = freq_low_power_min;
-		target_max = freq_low_power_max;
-		target_epp = 0xFF; /* CPPC Power */
-		target_epp_str = "power";
-		break;
-	case PLATFORM_PROFILE_BALANCED:
-		target_min = freq_balanced_min;
-		target_max = freq_balanced_max ?
-			freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-		target_epp = 0x80; /* CPPC Balance Performance */
-		target_epp_str = "balance_performance";
-		break;
-	case PLATFORM_PROFILE_PERFORMANCE:
-		target_min = freq_performance_min;
-		target_max = freq_performance_max ?
-			freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-		target_epp = 0x00; /* CPPC Peak Performance */
-		target_epp_str = "performance";
-		break;
-	default:
-		return;
-	}
-
+	max_perf = mf_get_max_highest_perf();
 	data->sync_in_progress = true;
 
 	for_each_online_cpu(cpu) {
 		struct cpufreq_policy *policy;
+		unsigned int target_min, target_max;
+		const char *target_epp_str;
+		u64 target_epp, cpu_perf = 0;
+		bool is_gold = false, is_silver = false;
+
+		if (max_perf > 0 && cppc_get_highest_perf(cpu, &cpu_perf) == 0) {
+			if (cpu_perf == max_perf)
+				is_gold = true;
+			else if (cpu_perf + 16 >= max_perf)
+				is_silver = true;
+		}
+
+		switch (profile) {
+		case PLATFORM_PROFILE_LOW_POWER:
+			target_min = freq_low_power_min;
+			target_max = freq_low_power_max;
+			if (is_gold) {
+				target_epp = 0x80;
+				target_epp_str = "balance_performance";
+			} else {
+				target_epp = 0xFF;
+				target_epp_str = "power";
+			}
+			break;
+
+		case PLATFORM_PROFILE_BALANCED:
+			target_max = freq_balanced_max ?
+				freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+			if (is_gold) {
+				target_min = max(freq_balanced_min, 2200000U);
+				target_epp = 0x00;
+				target_epp_str = "performance";
+			} else if (is_silver) {
+				target_min = freq_balanced_min;
+				target_epp = 0x80;
+				target_epp_str = "balance_performance";
+			} else {
+				target_min = freq_balanced_min;
+				target_epp = 0xC0;
+				target_epp_str = "balance_power";
+			}
+			break;
+
+		case PLATFORM_PROFILE_PERFORMANCE:
+			target_max = freq_performance_max ?
+				freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+			if (is_gold || is_silver || cpu < nr_cpu_ids / 2) {
+				target_min = freq_performance_min;
+				target_epp = 0x00;
+				target_epp_str = "performance";
+			} else {
+				target_min = max(freq_balanced_min, 2200000U);
+				target_epp = 0x80;
+				target_epp_str = "balance_performance";
+			}
+			break;
+
+		default:
+			data->sync_in_progress = false;
+			return;
+		}
 
 		if (freq_qos_request_active(&data->qos_min_req[cpu]))
 			freq_qos_update_request(&data->qos_min_req[cpu], target_min);
@@ -101,6 +151,10 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 
 		policy = cpufreq_cpu_get(cpu);
 		if (policy) {
+			if (!policy->boost_enabled && policy->boost_supported &&
+			    profile != PLATFORM_PROFILE_LOW_POWER)
+				cpufreq_boost_set_sw(policy, 1);
+
 			store_energy_performance_preference(policy,
 							    target_epp_str,
 							    strlen(target_epp_str));
@@ -109,8 +163,8 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 	}
 
 	dev_info(&data->pdev->dev,
-		 "Applied in-kernel QoS: profile=%d [%u - %u kHz] EPP=%s (0x%llx)\n",
-		 profile, target_min, target_max, target_epp_str, target_epp);
+		 "Applied in-kernel QoS: profile=%d (asymmetric EPP active)\n",
+		 profile);
 
 	data->sync_in_progress = false;
 }

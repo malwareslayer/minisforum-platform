@@ -244,17 +244,18 @@ When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=activ
 
 `minisforum-platform` intelligently synchronizes cpufreq policies and CPPC EPP hints directly in-kernel via official Linux kernel interfaces (`freq_qos_*` and `cppc_set_epp`) with **zero userspace helpers / zero shell subprocesses**:
 
-| ACPI Platform Profile | CPPC EPP Hint | In-Kernel Frequency QoS Range | Behavior & Architecture |
+| ACPI Platform Profile | Asymmetric Per-Core CPPC EPP | In-Kernel Frequency QoS Range | Behavior & Architecture |
 | :--- | :--- | :--- | :--- |
-| **`low-power`** | `power` (0xFF) | **1.75 GHz – 2.8 GHz** | Responsive 1.75 GHz baseline floor eliminates UI latency; capped at 2.8 GHz for whisper silence and low power draw. |
-| **`balanced`** | `balance_performance` (0x80) | **1.75 GHz – 5.26 GHz Max Boost** | Smooth 1.75 GHz baseline floor prevents C-state wake stutter; scales dynamically up to 5.26 GHz boost. |
-| **`performance`** | `performance` (0x00) | **2.63 GHz – 5.26 GHz Max Boost** | Immediate high-clock responsiveness with 2.63 GHz floor for peak single/multi-core throughput. |
+| **`low-power`** | **Gold Cores:** `balance_performance`<br>**Other Cores:** `power` (0xFF) | **1.75 GHz – 2.8 GHz** | Gold cores preserve 1.75 GHz floor to prevent UI lag; background cores enter deep power saving; whisper silent. |
+| **`balanced`** | **Gold Cores:** `performance` (0x00)<br>**Silver Cores:** `balance_performance`<br>**Secondary Cores:** `balance_power` | **2.2 GHz (Gold) / 1.75 GHz (Others) – 5.26 GHz Boost** | Asymmetric Preferred Cores: Interactive desktop loads steer to Gold Cores running on `performance` for instant 5.26 GHz boost; idling cores sip ~15W, keeping fans silent (~600 RPM). |
+| **`performance`** | **Primary Cores:** `performance` (0x00)<br>**SMT Threads:** `balance_performance` | **2.63 GHz (Primary) / 2.2 GHz (SMT) – 5.26 GHz Boost** | Blazing throughput; SMT threads avoid pumping excess voltage during non-saturated loads, keeping thermal headroom and fan acoustics optimal. |
 
-#### In-Kernel Architecture
+#### Asymmetric Per-Core CPPC Architecture
 
-The driver interacts directly with the Linux kernel subsystems:
-* Uses the kernel's **Frequency Quality of Service (QoS)** framework (`freq_qos_add_request` / `freq_qos_update_request`) to enforce hardware constraints across all CPUs in $< 1\text{ ms}$.
-* Uses **CPPC EPP** (`cppc_set_epp` and `store_energy_performance_preference`) to adjust AMD autonomous hardware energy performance preferences natively.
+The driver dynamically queries ACPI CPPC Preferred Cores (`cppc_get_highest_perf`) across all online CPUs to identify silicon silicon quality (Gold Cores, Silver Cores, Secondary Cores):
+* **Gold Cores:** Highest silicon binning capable of highest frequencies at lowest voltages. Assigned aggressive EPP (`performance`) and responsive floors for instant desktop responsiveness.
+* **Secondary Cores:** Idling or background threads are assigned conservative EPP (`balance_power`), minimizing total package power (PPT) and heat buildup.
+* **Autonomous Boost Enforcement:** Driver guarantees `cpufreq_boost_set_sw()` remains enabled on `balanced` and `performance`.
 
 #### Bidirectional Governor & Profile Synchronization
 
