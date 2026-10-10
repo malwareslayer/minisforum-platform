@@ -9,7 +9,7 @@ PWD := $(shell pwd)
 VERSION := 0.2.0
 DKMS_DIR := /usr/src/$(MODULE_NAME)-$(VERSION)
 
-.PHONY: all modules clean install load unload dkms-install dkms-uninstall
+.PHONY: all modules clean install load unload dkms-install dkms-uninstall deb
 
 all: modules
 
@@ -40,3 +40,7 @@ dkms-install:
 dkms-uninstall:
 	dkms remove -m $(MODULE_NAME) -v $(VERSION) --all || true
 	rm -rf $(DKMS_DIR)
+
+deb:
+	./packaging/debian/build-deb.sh $(VERSION)
+

@@ -17,6 +17,8 @@ Module.symvers
 
 # DKMS / Packaging
 *.tar.gz
+*.zip
+*.deb
 *.pkg.tar.zst
 /pkg/
 /src_pkg/

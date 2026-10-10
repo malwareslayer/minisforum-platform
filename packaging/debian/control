@@ -1,0 +1,12 @@
+Package: minisforum-platform-dkms
+Version: 0.2.0
+Section: kernel
+Priority: optional
+Architecture: all
+Depends: dkms (>= 2.1.0.0)
+Maintainer: Dwi Mulia Mokoginta <dwi-mulia-mokoginta@protonmail.com>
+Homepage: https://github.com/malwareslayer/minisforum-platform
+Description: Linux platform & hardware monitoring driver for Minisforum UM790 Pro
+ Minisforum platform and hardware monitoring kernel driver with in-kernel
+ CPPC QoS, ACPI platform profile integration, and EC dynamic fan curve
+ control for Minisforum UM790 Pro (Venus series).

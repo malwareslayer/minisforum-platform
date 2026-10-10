@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+PACKAGE_NAME="minisforum_platform"
+PACKAGE_VERSION="0.2.0"
+
+case "$1" in
+    configure)
+        dkms add -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" || true
+        dkms build -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" || true
+        dkms install -m "$PACKAGE_NAME" -v "$PACKAGE_VERSION" || true
+    ;;
+esac
+
+exit 0

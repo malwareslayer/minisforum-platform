@@ -19,6 +19,7 @@ jobs:
       - name: Prepare Release Archives
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          CLEAN_VER="${VERSION#v}"
           ARCHIVE_BASE="minisforum-platform-${VERSION}"
 
           # Create clean distribution directory
@@ -29,8 +30,11 @@ jobs:
           tar -czf "${ARCHIVE_BASE}.tar.gz" -C /tmp "${ARCHIVE_BASE}"
           (cd /tmp && zip -r "${GITHUB_WORKSPACE}/${ARCHIVE_BASE}.zip" "${ARCHIVE_BASE}")
 
+          # Build Debian/Ubuntu DKMS package
+          ./packaging/debian/build-deb.sh "${CLEAN_VER}"
+
           # Generate SHA256 checksums
-          sha256sum "${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}.zip" > sha256sums.txt
+          sha256sum "${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}.zip" *.deb > sha256sums.txt
           cat sha256sums.txt
 
       - name: Create GitHub Release
@@ -39,6 +43,7 @@ jobs:
           files: |
             minisforum-platform-*.tar.gz
             minisforum-platform-*.zip
+            *.deb
             sha256sums.txt
           generate_release_notes: true
           draft: false
