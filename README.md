@@ -238,34 +238,48 @@ The **Power Mode** slider will appear natively in the top-right Quick Settings m
 
 ---
 
-### 2. Autonomous CPU Governor & Frequency Coordination (`amd-pstate=guided`)
+### 2. Autonomous CPU Governor & Frequency Coordination (`amd-pstate=guided` & active)
 
-When running modern AMD processors with `amd-pstate=guided`, standard Linux platform profile switches only adjust EC TDP without changing CPU frequency scaling governors. If left on `powersave`, the CPU gets pinned to its minimum base frequency (~1.11 GHz) and never scales up under load.
+When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=active`, standard Linux platform profile switches only adjust EC TDP without changing CPU frequency scaling governors. If left on generic `powersave`, the CPU gets pinned to its minimum base frequency (~1.11 GHz) with zero dynamic scaling, causing desktop micro-stutters.
 
-`minisforum-platform` automatically synchronizes cpufreq governors and frequency scaling limits across all CPU cores when the platform profile changes:
+`minisforum-platform` intelligently synchronizes cpufreq governors, frequency scaling brackets, and EPP hints across all CPU cores with **bidirectional synchronization**:
 
-| ACPI Platform Profile | Default Governor | Behavior & Frequency Scaling |
-| :--- | :--- | :--- |
-| **`low-power`** | `powersave` | Pinned to ~1.11 GHz floor for maximum battery/power efficiency and silent operation. |
-| **`balanced`** | `schedutil` | Dynamic autonomous scaling based on kernel scheduler load (scales dynamically from 1.11 GHz to boost). |
-| **`performance`** | `performance` | High-performance scaling for maximum single/multi-core throughput. |
+| ACPI Platform Profile | Default Governor | Dynamic Frequency Range | Behavior & Architecture |
+| :--- | :--- | :--- | :--- |
+| **`low-power`** | `schedutil` | **1.9 GHz – 2.9 GHz** *(ThinkPad-style)* | Scales dynamically within a smooth, low-power bracket. Never drops to 1.1 GHz (zero UI lag) and never boosts above 2.9 GHz (whisper quiet, cold thermal profile). |
+| **`balanced`** | `schedutil` | **Base Floor – Max Boost** | Dynamic autonomous scaling based on kernel scheduler load. Idles down deeply to save power, scales up to 5.2 GHz instantaneously on demand. |
+| **`performance`** | `performance` | **2.8 GHz – Max Boost** | Aggressive high-clock profile with 2.8 GHz baseline floor for minimum latency and peak throughput. |
+
+#### Bidirectional Governor & Profile Synchronization
+
+Synchronization is fully bidirectional:
+* **Profile to Governor:** Changing the ACPI platform profile (via GNOME Quick Settings, KDE Plasma, or `powerprofilesctl`) automatically applies the appropriate governor, frequency brackets, and EPP hints.
+* **Governor to Profile:** If an external utility (e.g. `tlp`, `tuned`, GameMode, or a custom script) changes the CPU governor:
+  * Switching to `powersave` $\rightarrow$ automatically aligns the platform profile to **`low-power`** (EC Quiet 35W).
+  * Switching to `performance` $\rightarrow$ automatically aligns the platform profile to **`performance`** (EC Turbo 65W).
+  * Switching to `schedutil` / `ondemand` $\rightarrow$ automatically aligns the platform profile to **`balanced`** (EC Balanced 54W).
+  * Sends native `platform_profile_notify()` events so desktop UI sliders update in real time.
+
+#### Non-AMD P-State Fallback
+
+If the driver is loaded on hardware without active AMD P-State (e.g. an Intel machine or unsupported CPU architecture):
+* Autonomous cpufreq overrides are automatically disabled (`manage_cpufreq = false`).
+* Fan control safely preserves the factory BIOS autonomous curve, leaving hardware thermal management under default BIOS control.
 
 #### Customizing Governors & Frequency Limits at Runtime
 
-You can change governors (e.g. `ondemand`, `conservative`, `userspace`) or cap maximum frequencies per profile via sysfs on the fly:
+You can adjust governors or customize frequency brackets per profile on the fly via sysfs:
 
 ```bash
-# Set Balanced profile governor to ondemand or schedutil
+# Customize Low-Power frequency brackets (e.g. 1.8 GHz - 3.0 GHz)
+echo 1800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_min
+echo 3000000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_max
+
+# Change Balanced profile governor (e.g. ondemand or schedutil)
 echo "schedutil" | sudo tee /sys/devices/platform/minisforum_platform/gov_balanced
 
-# Set Performance profile governor to conservative or performance
+# Change Performance profile governor (e.g. conservative or performance)
 echo "conservative" | sudo tee /sys/devices/platform/minisforum_platform/gov_performance
-
-# Cap Balanced profile to 4.2 GHz (4200000 kHz)
-echo 4200000 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_max
-
-# Restore unconstrained maximum frequency (0 = default cpuinfo_max_freq)
-echo 0 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_max
 
 # Disable autonomous cpufreq management if you prefer manual cpupower control
 echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
@@ -276,7 +290,7 @@ echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
 You can configure persistent defaults in `/etc/modprobe.d/minisforum_platform.conf`:
 
 ```ini
-options minisforum_platform gov_balanced="schedutil" gov_performance="performance" gov_low_power="powersave" freq_low_power_max=2500000
+options minisforum_platform gov_low_power="schedutil" freq_low_power_min=1900000 freq_low_power_max=2900000 gov_balanced="schedutil" gov_performance="performance" freq_performance_min=2800000
 ```
 
 ---

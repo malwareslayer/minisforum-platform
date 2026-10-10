@@ -306,6 +306,9 @@ static void mf_fan_worker(struct work_struct *work)
 		mf_apply_fan_code(data, next_code);
 	}
 
+	/* Periodically check if cpufreq governor changed externally */
+	minisforum_profile_check_governor(data);
+
 reschedule:
 	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
 }
@@ -528,19 +531,25 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 	memcpy(data->fan_baseline_bases, mf_bios_baseline_bases, sizeof(mf_bios_baseline_bases));
 	memcpy(data->fan_baseline_slopes, mf_bios_baseline_slopes, sizeof(mf_bios_baseline_slopes));
 
-	/* Default to automatic mode with inaudible ~550-600 RPM idle floor */
+	/* Default to automatic mode */
 	data->fan_manual = false;
 	data->fan_target_code = 6;
 	data->fan_desired_code = 6;
 	data->temp_ema = 0;
 	data->cooldown_timer = 0;
 
-	/* Apply initial code 6 floor */
-	mf_apply_fan_code(data, 6);
+	if (data->has_amd_pstate) {
+		/* Apply initial code 6 floor */
+		mf_apply_fan_code(data, 6);
 
-	/* Initialize and start the dynamic governor workqueue */
-	INIT_DELAYED_WORK(&data->fan_work, mf_fan_worker);
-	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
+		/* Initialize and start the dynamic governor workqueue */
+		INIT_DELAYED_WORK(&data->fan_work, mf_fan_worker);
+		queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
+	} else {
+		/* Non-AMD P-State: restore native BIOS curve table */
+		mf_write_curve_table(data, data->fan_baseline_bases, data->fan_baseline_slopes);
+		dev_info(&data->pdev->dev, "Preserving native BIOS autonomous fan control (no AMD P-State)\n");
+	}
 
 	data->hwmon_dev = hwmon_device_register_with_info(&data->pdev->dev,
 							  "minisforum",
@@ -550,18 +559,20 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 	if (IS_ERR(data->hwmon_dev)) {
 		dev_err(&data->pdev->dev, "Failed to register hwmon device: %ld\n",
 			PTR_ERR(data->hwmon_dev));
-		cancel_delayed_work_sync(&data->fan_work);
+		if (data->has_amd_pstate)
+			cancel_delayed_work_sync(&data->fan_work);
 		return PTR_ERR(data->hwmon_dev);
 	}
 
-	dev_info(&data->pdev->dev, "HWMON sensors and Dynamic Thermal Governor registered\n");
+	dev_info(&data->pdev->dev, "HWMON sensors registered\n");
 	return 0;
 }
 
 void minisforum_hwmon_exit(struct minisforum_data *data)
 {
-	/* Stop dynamic governor workqueue */
-	cancel_delayed_work_sync(&data->fan_work);
+	/* Stop dynamic governor workqueue if active */
+	if (data->has_amd_pstate)
+		cancel_delayed_work_sync(&data->fan_work);
 
 	/* Restore factory BIOS baseline curve to ensure safety after unload */
 	mf_write_curve_table(data, data->fan_baseline_bases, data->fan_baseline_slopes);
