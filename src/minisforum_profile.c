@@ -77,7 +77,6 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 		return;
 
 	max_perf = mf_get_max_highest_perf();
-	data->sync_in_progress = true;
 
 	for_each_online_cpu(cpu) {
 		struct cpufreq_policy *policy;
@@ -101,8 +100,8 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 				target_epp = 0x80;
 				target_epp_str = "balance_performance";
 			} else {
-				target_epp = 0xFF;
-				target_epp_str = "power";
+				target_epp = 0xC0;
+				target_epp_str = "balance_power";
 			}
 			break;
 
@@ -135,7 +134,6 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 			break;
 
 		default:
-			data->sync_in_progress = false;
 			return;
 		}
 
@@ -161,73 +159,12 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 	dev_info(&data->pdev->dev,
 		 "Applied in-kernel QoS: profile=%d (asymmetric EPP active)\n",
 		 profile);
-
-	data->sync_in_progress = false;
 }
 
 void minisforum_profile_sync_cpufreq(struct minisforum_data *data,
 				     enum platform_profile_option profile)
 {
 	mf_apply_profile_qos(data, profile);
-}
-
-/*
- * Bidirectional check: Detects if frequency constraints or governors were changed
- * externally and aligns the ACPI platform profile accordingly.
- */
-void minisforum_profile_check_governor(struct minisforum_data *data)
-{
-	struct cpufreq_policy *policy;
-	char current_gov[CPUFREQ_NAME_LEN] = {0};
-	unsigned int max_freq = 0;
-	enum platform_profile_option target_profile;
-	u8 ec_code;
-
-	if (!manage_cpufreq || !data->has_amd_pstate || data->sync_in_progress)
-		return;
-
-	policy = cpufreq_cpu_get(0);
-	if (!policy)
-		return;
-
-	if (policy->governor)
-		strscpy(current_gov, policy->governor->name, sizeof(current_gov));
-	max_freq = policy->max;
-	cpufreq_cpu_put(policy);
-
-	if (current_gov[0] == '\0')
-		return;
-
-	/* Determine target profile from active governor and constraints */
-	if (strcmp(current_gov, "performance") == 0) {
-		target_profile = PLATFORM_PROFILE_PERFORMANCE;
-		ec_code = MF_EC_PROFILE_PERFORMANCE;
-	} else if (strcmp(current_gov, "powersave") == 0 &&
-		   freq_low_power_max > 0 && max_freq <= freq_low_power_max + 100000) {
-		target_profile = PLATFORM_PROFILE_LOW_POWER;
-		ec_code = MF_EC_PROFILE_QUIET;
-	} else {
-		target_profile = PLATFORM_PROFILE_BALANCED;
-		ec_code = MF_EC_PROFILE_BALANCED;
-	}
-
-	if (target_profile != data->current_profile) {
-		dev_info(&data->pdev->dev,
-			 "External policy change detected ('%s', max %u kHz) -> aligning platform profile to %d\n",
-			 current_gov, max_freq, target_profile);
-
-		mutex_lock(&data->lock);
-		data->current_profile = target_profile;
-		minisforum_ec_write(MF_EC_REG_CPU_PROFILE, ec_code);
-		mutex_unlock(&data->lock);
-
-		/* Update fan curve */
-		minisforum_hwmon_apply_profile_curve(data, target_profile);
-
-		/* Notify userspace / desktop environment */
-		if (data->pp_dev)
-			platform_profile_notify(data->pp_dev);
-	}
 }
 
 /* Sysfs Device Attributes */
@@ -510,7 +447,6 @@ int minisforum_profile_init(struct minisforum_data *data)
 
 	/* Detect presence of AMD P-State architecture */
 	data->has_amd_pstate = mf_detect_amd_pstate();
-	data->sync_in_progress = false;
 
 	if (!data->has_amd_pstate) {
 		manage_cpufreq = false;

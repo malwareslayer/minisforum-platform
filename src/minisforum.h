@@ -80,7 +80,6 @@ struct minisforum_data {
 	struct freq_qos_request *qos_min_req;
 	struct freq_qos_request *qos_max_req;
 	bool qos_initialized;
-	bool sync_in_progress;
 	bool has_amd_pstate;
 };
 
@@ -89,7 +88,6 @@ int minisforum_profile_init(struct minisforum_data *data);
 void minisforum_profile_exit(struct minisforum_data *data);
 void minisforum_profile_sync_cpufreq(struct minisforum_data *data,
 				     enum platform_profile_option profile);
-void minisforum_profile_check_governor(struct minisforum_data *data);
 
 int minisforum_hwmon_init(struct minisforum_data *data);
 void minisforum_hwmon_exit(struct minisforum_data *data);

@@ -302,9 +302,6 @@ static void mf_fan_worker(struct work_struct *work)
 	if (next_code != current_code)
 		mf_apply_fan_code(data, next_code);
 
-	/* Periodically check if cpufreq governor changed externally */
-	minisforum_profile_check_governor(data);
-
 reschedule:
 	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
 }

@@ -246,26 +246,36 @@ When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=activ
 
 | ACPI Platform Profile | Asymmetric Per-Core CPPC EPP | In-Kernel Frequency QoS Range | Behavior & Architecture |
 | :--- | :--- | :--- | :--- |
-| **`low-power`** | **Gold Cores:** `balance_performance`<br>**Other Cores:** `power` (0xFF) | **1.75 GHz – 2.8 GHz** | Gold cores preserve 1.75 GHz floor to prevent UI lag; background cores enter deep power saving; whisper silent. |
+| **`low-power`** | **Gold Cores:** `balance_performance`<br>**Other Cores:** `balance_power` (0xC0) | **1.75 GHz – 2.8 GHz** | Gold cores preserve 1.75 GHz floor to prevent UI lag; background cores enter deep power saving on balance_power; whisper silent. |
 | **`balanced`** | **Gold Cores:** `performance` (0x00)<br>**Other Cores:** `balance_performance` (0x80) | **2.2 GHz (Gold) / 1.75 GHz (Others) – 5.26 GHz Boost** | Asymmetric Preferred Cores: Interactive desktop loads steer to Gold Cores on `performance` for instant 5.26 GHz boost; remaining cores run on `balance_performance` with zero lag and whisper-silent fan (~600 RPM). |
 | **`performance`** | **Primary Cores:** `performance` (0x00)<br>**SMT Threads:** `balance_performance` | **2.63 GHz (Primary) / 2.2 GHz (SMT) – 5.26 GHz Boost** | Blazing throughput; SMT threads avoid pumping excess voltage during non-saturated loads, keeping thermal headroom and fan acoustics optimal. |
 
 #### Asymmetric Per-Core CPPC Architecture
 
-The driver dynamically queries ACPI CPPC Preferred Cores (`cppc_get_highest_perf`) across all online CPUs to identify silicon silicon quality (Gold Cores, Silver Cores, Secondary Cores):
+The driver dynamically queries ACPI CPPC Preferred Cores (`cppc_get_highest_perf`) across all online CPUs to identify silicon quality (Gold Cores, Silver Cores, Secondary Cores):
 * **Gold Cores:** Highest silicon binning capable of highest frequencies at lowest voltages. Assigned aggressive EPP (`performance`) and responsive floors for instant desktop responsiveness.
 * **Other Cores:** Assigned `balance_performance` on balanced mode to eliminate sluggishness while maintaining whisper-quiet fan acoustics.
 * **Autonomous Boost Enforcement:** Driver guarantees `cpufreq_boost_set_sw()` remains enabled on `balanced` and `performance`.
 
-#### Bidirectional Governor & Profile Synchronization
+#### GNOME, KDE & TLP Integration
 
-Synchronization is fully bidirectional:
-* **Profile to Hardware:** Changing the ACPI platform profile (via GNOME Quick Settings, KDE Plasma, or `powerprofilesctl`) automatically applies the appropriate QoS frequency brackets, EPP hints, and EC TDP.
-* **Policy to Profile:** If an external utility (e.g. `tlp`, `tuned`, GameMode, or a custom script) changes policy constraints:
-  * Switching to `powersave` (capped) $\rightarrow$ automatically aligns the platform profile to **`low-power`** (EC Quiet 35W).
-  * Switching to `performance` $\rightarrow$ automatically aligns the platform profile to **`performance`** (EC Turbo 65W).
-  * Switching to `schedutil` / `balance_performance` $\rightarrow$ automatically aligns the platform profile to **`balanced`** (EC Balanced 54W).
-  * Emits native `platform_profile_notify()` events so desktop UI sliders update in real time.
+The driver acts as the authoritative kernel ACPI platform profile handler for GNOME, KDE, `power-profiles-daemon`, and `tlp-pd`:
+* **Single Source of Truth:** Userspace (GNOME Quick Settings slider, KDE Plasma, or CLI) sets the platform profile, which instantly programs the EC TDP register, fan curve, frequency QoS floors, and CPPC EPP hints.
+* **TLP Compatibility:** When using TLP with `tlp-pd`, ensure `/etc/tlp.conf` does not lock profiles via `TLP_PERSISTENT_DEFAULT`:
+  ```ini
+  # Allow dynamic switching from desktop UI:
+  #TLP_PERSISTENT_DEFAULT=0
+
+  # Synchronize platform profiles:
+  PLATFORM_PROFILE_ON_AC=performance
+  PLATFORM_PROFILE_ON_BAT=balanced
+  PLATFORM_PROFILE_ON_SAV=low-power
+
+  # Synchronize EPP policies:
+  CPU_ENERGY_PERF_POLICY_ON_AC=performance
+  CPU_ENERGY_PERF_POLICY_ON_BAT=balance_performance
+  CPU_ENERGY_PERF_POLICY_ON_SAV=balance_power
+  ```
 
 #### Non-AMD P-State Fallback
 
