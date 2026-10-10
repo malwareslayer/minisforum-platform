@@ -247,14 +247,14 @@ When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=activ
 | ACPI Platform Profile | Asymmetric Per-Core CPPC EPP | In-Kernel Frequency QoS Range | Behavior & Architecture |
 | :--- | :--- | :--- | :--- |
 | **`low-power`** | **Gold Cores:** `balance_performance`<br>**Other Cores:** `power` (0xFF) | **1.75 GHz – 2.8 GHz** | Gold cores preserve 1.75 GHz floor to prevent UI lag; background cores enter deep power saving; whisper silent. |
-| **`balanced`** | **Gold Cores:** `performance` (0x00)<br>**Silver Cores:** `balance_performance`<br>**Secondary Cores:** `balance_power` | **2.2 GHz (Gold) / 1.75 GHz (Others) – 5.26 GHz Boost** | Asymmetric Preferred Cores: Interactive desktop loads steer to Gold Cores running on `performance` for instant 5.26 GHz boost; idling cores sip ~15W, keeping fans silent (~600 RPM). |
+| **`balanced`** | **Gold Cores:** `performance` (0x00)<br>**Other Cores:** `balance_performance` (0x80) | **2.2 GHz (Gold) / 1.75 GHz (Others) – 5.26 GHz Boost** | Asymmetric Preferred Cores: Interactive desktop loads steer to Gold Cores on `performance` for instant 5.26 GHz boost; remaining cores run on `balance_performance` with zero lag and whisper-silent fan (~600 RPM). |
 | **`performance`** | **Primary Cores:** `performance` (0x00)<br>**SMT Threads:** `balance_performance` | **2.63 GHz (Primary) / 2.2 GHz (SMT) – 5.26 GHz Boost** | Blazing throughput; SMT threads avoid pumping excess voltage during non-saturated loads, keeping thermal headroom and fan acoustics optimal. |
 
 #### Asymmetric Per-Core CPPC Architecture
 
 The driver dynamically queries ACPI CPPC Preferred Cores (`cppc_get_highest_perf`) across all online CPUs to identify silicon silicon quality (Gold Cores, Silver Cores, Secondary Cores):
 * **Gold Cores:** Highest silicon binning capable of highest frequencies at lowest voltages. Assigned aggressive EPP (`performance`) and responsive floors for instant desktop responsiveness.
-* **Secondary Cores:** Idling or background threads are assigned conservative EPP (`balance_power`), minimizing total package power (PPT) and heat buildup.
+* **Other Cores:** Assigned `balance_performance` on balanced mode to eliminate sluggishness while maintaining whisper-quiet fan acoustics.
 * **Autonomous Boost Enforcement:** Driver guarantees `cpufreq_boost_set_sw()` remains enabled on `balanced` and `performance`.
 
 #### Bidirectional Governor & Profile Synchronization

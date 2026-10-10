@@ -113,14 +113,10 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 				target_min = max(freq_balanced_min, 2200000U);
 				target_epp = 0x00;
 				target_epp_str = "performance";
-			} else if (is_silver) {
+			} else {
 				target_min = freq_balanced_min;
 				target_epp = 0x80;
 				target_epp_str = "balance_performance";
-			} else {
-				target_min = freq_balanced_min;
-				target_epp = 0xC0;
-				target_epp_str = "balance_power";
 			}
 			break;
 
