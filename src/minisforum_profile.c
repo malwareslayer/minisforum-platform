@@ -63,7 +63,18 @@ static bool mf_detect_amd_pstate(void)
 	if (!driver)
 		return false;
 
-	return (strcmp(driver, "amd-pstate") == 0 ||
+	return (strncmp(driver, "amd-pstate", 10) == 0 ||
+		strncmp(driver, "amd_pstate", 10) == 0);
+}
+
+static bool mf_is_amd_pstate_epp(void)
+{
+	const char *driver = cpufreq_get_current_driver();
+
+	if (!driver)
+		return false;
+
+	return (strcmp(driver, "amd-pstate-epp") == 0 ||
 		strcmp(driver, "amd_pstate_epp") == 0);
 }
 
@@ -71,7 +82,8 @@ static bool mf_detect_amd_pstate(void)
 static void mf_cpufreq_worker(struct work_struct *work)
 {
 	struct minisforum_data *data = container_of(work, struct minisforum_data, cpufreq_work);
-	const char *target_gov = gov_balanced;
+	bool is_epp = mf_is_amd_pstate_epp();
+	const char *target_gov = is_epp ? "powersave" : gov_balanced;
 	const char *target_epp = "balance_performance";
 	unsigned int target_min_freq = freq_balanced_min;
 	unsigned int target_max_freq = freq_balanced_max;
@@ -91,19 +103,19 @@ static void mf_cpufreq_worker(struct work_struct *work)
 
 	switch (data->pending_profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
-		target_gov = gov_low_power;
+		target_gov = is_epp ? "powersave" : gov_low_power;
 		target_min_freq = freq_low_power_min;
 		target_max_freq = freq_low_power_max;
 		target_epp = "power";
 		break;
 	case PLATFORM_PROFILE_BALANCED:
-		target_gov = gov_balanced;
+		target_gov = is_epp ? "powersave" : gov_balanced;
 		target_min_freq = freq_balanced_min;
 		target_max_freq = freq_balanced_max;
 		target_epp = "balance_performance";
 		break;
 	case PLATFORM_PROFILE_PERFORMANCE:
-		target_gov = gov_performance;
+		target_gov = "performance";
 		target_min_freq = freq_performance_min;
 		target_max_freq = freq_performance_max;
 		target_epp = "performance";
@@ -188,21 +200,14 @@ void minisforum_profile_check_governor(struct minisforum_data *data)
 	if (current_gov[0] == '\0')
 		return;
 
+	bool is_epp = mf_is_amd_pstate_epp();
+
 	/* Determine target profile from active governor and frequency constraints */
-	if (strcmp(current_gov, "powersave") == 0) {
-		target_profile = PLATFORM_PROFILE_LOW_POWER;
-		ec_code = MF_EC_PROFILE_QUIET;
-	} else if (strcmp(current_gov, "performance") == 0) {
-		target_profile = PLATFORM_PROFILE_PERFORMANCE;
-		ec_code = MF_EC_PROFILE_PERFORMANCE;
-	} else if (strcmp(current_gov, "schedutil") == 0 ||
-		   strcmp(current_gov, "ondemand") == 0 ||
-		   strcmp(current_gov, "conservative") == 0) {
-		/*
-		 * If CPU max frequency is capped to low-power threshold (e.g. <= 3.0 GHz),
-		 * classify as low-power. Otherwise, classify as balanced.
-		 */
-		if (freq_low_power_max > 0 && max_freq <= freq_low_power_max + 100000) {
+	if (is_epp) {
+		if (strcmp(current_gov, "performance") == 0) {
+			target_profile = PLATFORM_PROFILE_PERFORMANCE;
+			ec_code = MF_EC_PROFILE_PERFORMANCE;
+		} else if (freq_low_power_max > 0 && max_freq <= freq_low_power_max + 100000) {
 			target_profile = PLATFORM_PROFILE_LOW_POWER;
 			ec_code = MF_EC_PROFILE_QUIET;
 		} else {
@@ -210,7 +215,25 @@ void minisforum_profile_check_governor(struct minisforum_data *data)
 			ec_code = MF_EC_PROFILE_BALANCED;
 		}
 	} else {
-		return;
+		if (strcmp(current_gov, "performance") == 0) {
+			target_profile = PLATFORM_PROFILE_PERFORMANCE;
+			ec_code = MF_EC_PROFILE_PERFORMANCE;
+		} else if (strcmp(current_gov, "powersave") == 0) {
+			target_profile = PLATFORM_PROFILE_LOW_POWER;
+			ec_code = MF_EC_PROFILE_QUIET;
+		} else if (strcmp(current_gov, "schedutil") == 0 ||
+			   strcmp(current_gov, "ondemand") == 0 ||
+			   strcmp(current_gov, "conservative") == 0) {
+			if (freq_low_power_max > 0 && max_freq <= freq_low_power_max + 100000) {
+				target_profile = PLATFORM_PROFILE_LOW_POWER;
+				ec_code = MF_EC_PROFILE_QUIET;
+			} else {
+				target_profile = PLATFORM_PROFILE_BALANCED;
+				ec_code = MF_EC_PROFILE_BALANCED;
+			}
+		} else {
+			return;
+		}
 	}
 
 	if (target_profile != data->current_profile) {
