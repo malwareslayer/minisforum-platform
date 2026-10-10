@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Minisforum Platform Driver Core
  *
@@ -7,10 +7,18 @@
 
 #include "minisforum.h"
 
-/* Board Configuration Profiles */
+/* Board configuration profiles */
 static const struct minisforum_fan_desc f7bsc_fans[] = {
-	{ .label = "CPU Fan", .temp_reg = MF_EC_REG_TEMP_CPU, .profile_reg = MF_EC_REG_CPU_PROFILE },
-	{ .label = "System Fan", .temp_reg = MF_EC_REG_TEMP_BOARD, .profile_reg = 0 },
+	{
+		.label = "CPU Fan",
+		.temp_reg = MF_EC_REG_TEMP_CPU,
+		.profile_reg = MF_EC_REG_CPU_PROFILE,
+	},
+	{
+		.label = "System Fan",
+		.temp_reg = MF_EC_REG_TEMP_BOARD,
+		.profile_reg = 0,
+	},
 };
 
 static const struct minisforum_board_config board_um790_pro = {

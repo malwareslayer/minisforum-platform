@@ -1,12 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Minisforum Platform Profile Driver (TDP / Thermal Profiles & CPU Coordination)
  *
  * Exposes /sys/firmware/acpi/platform_profile for GNOME, KDE, and power-profiles-daemon,
  * and dynamically synchronizes in-kernel cpufreq QoS limits and hardware CPPC EPP hints.
- *
- * Implements standard Linux kernel interfaces (freq_qos_* and cppc_set_epp) without
- * relying on userspace helpers or shell processes.
  */
 
 #include <linux/cpufreq.h>
@@ -19,32 +16,29 @@ static bool manage_cpufreq = true;
 module_param(manage_cpufreq, bool, 0644);
 MODULE_PARM_DESC(manage_cpufreq, "Synchronize in-kernel frequency QoS and CPPC EPP with platform profiles (default: true)");
 
-/* Low-Power Tuning (ThinkPad-style: snappy 1.6 GHz floor to eliminate stutter, capped at 2.8 GHz) */
-static unsigned int freq_low_power_min = 1600000;
+static unsigned int freq_low_power_min = 1754353;
 module_param(freq_low_power_min, uint, 0644);
-MODULE_PARM_DESC(freq_low_power_min, "Min CPU frequency in kHz for low-power profile (default: 1600000 / 1.6 GHz)");
+MODULE_PARM_DESC(freq_low_power_min, "Min CPU frequency in kHz for low-power profile");
 
 static unsigned int freq_low_power_max = 2800000;
 module_param(freq_low_power_max, uint, 0644);
-MODULE_PARM_DESC(freq_low_power_max, "Max CPU frequency in kHz for low-power profile (default: 2800000 / 2.8 GHz)");
+MODULE_PARM_DESC(freq_low_power_max, "Max CPU frequency in kHz for low-power profile");
 
-/* Balanced Tuning (Buttery-smooth 1.6 GHz base floor, unconstrained turbo boost) */
-static unsigned int freq_balanced_min = 1600000;
+static unsigned int freq_balanced_min = 1754353;
 module_param(freq_balanced_min, uint, 0644);
-MODULE_PARM_DESC(freq_balanced_min, "Min CPU frequency in kHz for balanced profile (default: 1600000 / 1.6 GHz)");
+MODULE_PARM_DESC(freq_balanced_min, "Min CPU frequency in kHz for balanced profile");
 
 static unsigned int freq_balanced_max;
 module_param(freq_balanced_max, uint, 0644);
-MODULE_PARM_DESC(freq_balanced_max, "Max CPU frequency in kHz for balanced profile (0: unconstrained boost)");
+MODULE_PARM_DESC(freq_balanced_max, "Max CPU frequency in kHz for balanced profile (0: unconstrained)");
 
-/* Performance Tuning (Aggressive 2.8 GHz base floor, unconstrained turbo boost) */
-static unsigned int freq_performance_min = 2800000;
+static unsigned int freq_performance_min = 2631530;
 module_param(freq_performance_min, uint, 0644);
-MODULE_PARM_DESC(freq_performance_min, "Min CPU frequency in kHz for performance profile (default: 2800000 / 2.8 GHz)");
+MODULE_PARM_DESC(freq_performance_min, "Min CPU frequency in kHz for performance profile");
 
 static unsigned int freq_performance_max;
 module_param(freq_performance_max, uint, 0644);
-MODULE_PARM_DESC(freq_performance_max, "Max CPU frequency in kHz for performance profile (0: unconstrained boost)");
+MODULE_PARM_DESC(freq_performance_max, "Max CPU frequency in kHz for performance profile (0: unconstrained)");
 
 static bool mf_detect_amd_pstate(void)
 {
@@ -57,13 +51,9 @@ static bool mf_detect_amd_pstate(void)
 		strncmp(driver, "amd_pstate", 10) == 0);
 }
 
-extern ssize_t store_energy_performance_preference(struct cpufreq_policy *policy, const char *buf, size_t count);
-
-/*
- * Pure native in-kernel application of frequency constraints and CPPC EPP.
- * Standard kernel approach: zero userspace helpers, zero /bin/sh subprocesses.
- */
-static void mf_apply_profile_qos(struct minisforum_data *data, enum platform_profile_option profile)
+/* Apply frequency constraints and energy performance preference */
+static void mf_apply_profile_qos(struct minisforum_data *data,
+				 enum platform_profile_option profile)
 {
 	unsigned int target_min, target_max;
 	const char *target_epp_str;
@@ -82,13 +72,15 @@ static void mf_apply_profile_qos(struct minisforum_data *data, enum platform_pro
 		break;
 	case PLATFORM_PROFILE_BALANCED:
 		target_min = freq_balanced_min;
-		target_max = freq_balanced_max ? freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+		target_max = freq_balanced_max ?
+			freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 		target_epp = 0x80; /* CPPC Balance Performance */
 		target_epp_str = "balance_performance";
 		break;
 	case PLATFORM_PROFILE_PERFORMANCE:
 		target_min = freq_performance_min;
-		target_max = freq_performance_max ? freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+		target_max = freq_performance_max ?
+			freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 		target_epp = 0x00; /* CPPC Peak Performance */
 		target_epp_str = "performance";
 		break;
@@ -109,7 +101,9 @@ static void mf_apply_profile_qos(struct minisforum_data *data, enum platform_pro
 
 		policy = cpufreq_cpu_get(cpu);
 		if (policy) {
-			store_energy_performance_preference(policy, target_epp_str, strlen(target_epp_str));
+			store_energy_performance_preference(policy,
+							    target_epp_str,
+							    strlen(target_epp_str));
 			cpufreq_cpu_put(policy);
 		}
 	}
@@ -121,7 +115,8 @@ static void mf_apply_profile_qos(struct minisforum_data *data, enum platform_pro
 	data->sync_in_progress = false;
 }
 
-void minisforum_profile_sync_cpufreq(struct minisforum_data *data, enum platform_profile_option profile)
+void minisforum_profile_sync_cpufreq(struct minisforum_data *data,
+				     enum platform_profile_option profile)
 {
 	mf_apply_profile_qos(data, profile);
 }
@@ -186,12 +181,15 @@ void minisforum_profile_check_governor(struct minisforum_data *data)
 }
 
 /* Sysfs Device Attributes */
-static ssize_t manage_cpufreq_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t manage_cpufreq_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%d\n", manage_cpufreq ? 1 : 0);
 }
 
-static ssize_t manage_cpufreq_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t manage_cpufreq_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	bool val;
@@ -209,12 +207,15 @@ static ssize_t manage_cpufreq_store(struct device *dev, struct device_attribute 
 }
 static DEVICE_ATTR_RW(manage_cpufreq);
 
-static ssize_t freq_low_power_min_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t freq_low_power_min_show(struct device *dev,
+				       struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%u\n", freq_low_power_min);
 }
 
-static ssize_t freq_low_power_min_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t freq_low_power_min_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	unsigned int val;
@@ -232,12 +233,15 @@ static ssize_t freq_low_power_min_store(struct device *dev, struct device_attrib
 }
 static DEVICE_ATTR_RW(freq_low_power_min);
 
-static ssize_t freq_low_power_max_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t freq_low_power_max_show(struct device *dev,
+				       struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%u\n", freq_low_power_max);
 }
 
-static ssize_t freq_low_power_max_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t freq_low_power_max_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	unsigned int val;
@@ -255,12 +259,15 @@ static ssize_t freq_low_power_max_store(struct device *dev, struct device_attrib
 }
 static DEVICE_ATTR_RW(freq_low_power_max);
 
-static ssize_t freq_balanced_min_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t freq_balanced_min_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%u\n", freq_balanced_min);
 }
 
-static ssize_t freq_balanced_min_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t freq_balanced_min_store(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	unsigned int val;
@@ -278,12 +285,15 @@ static ssize_t freq_balanced_min_store(struct device *dev, struct device_attribu
 }
 static DEVICE_ATTR_RW(freq_balanced_min);
 
-static ssize_t freq_balanced_max_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t freq_balanced_max_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
 {
 	return sysfs_emit(buf, "%u\n", freq_balanced_max);
 }
 
-static ssize_t freq_balanced_max_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t freq_balanced_max_store(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	unsigned int val;
@@ -301,12 +311,16 @@ static ssize_t freq_balanced_max_store(struct device *dev, struct device_attribu
 }
 static DEVICE_ATTR_RW(freq_balanced_max);
 
-static ssize_t freq_performance_min_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t freq_performance_min_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
 {
 	return sysfs_emit(buf, "%u\n", freq_performance_min);
 }
 
-static ssize_t freq_performance_min_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t freq_performance_min_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	unsigned int val;
@@ -324,12 +338,16 @@ static ssize_t freq_performance_min_store(struct device *dev, struct device_attr
 }
 static DEVICE_ATTR_RW(freq_performance_min);
 
-static ssize_t freq_performance_max_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t freq_performance_max_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
 {
 	return sysfs_emit(buf, "%u\n", freq_performance_max);
 }
 
-static ssize_t freq_performance_max_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t freq_performance_max_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
 	unsigned int val;
@@ -414,9 +432,8 @@ static int mf_profile_set(struct device *dev, enum platform_profile_option profi
 
 	/* Write the corresponding profile selector to the EC */
 	ret = minisforum_ec_write(MF_EC_REG_CPU_PROFILE, ec_code);
-	if (ret) {
+	if (ret)
 		dev_warn(dev, "Failed to update EC profile register (err %d)\n", ret);
-	}
 
 	data->current_profile = profile;
 	mutex_unlock(&data->lock);
@@ -466,6 +483,7 @@ int minisforum_profile_init(struct minisforum_data *data)
 	} else {
 		for_each_online_cpu(cpu) {
 			struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
+
 			if (policy) {
 				freq_qos_add_request(&policy->constraints,
 						     &data->qos_min_req[cpu],
@@ -510,7 +528,8 @@ int minisforum_profile_init(struct minisforum_data *data)
 
 	ret = sysfs_create_group(&data->pdev->dev.kobj, &mf_platform_attr_group);
 	if (ret)
-		dev_warn(&data->pdev->dev, "Failed to create sysfs platform attribute group (%d)\n", ret);
+		dev_warn(&data->pdev->dev,
+			 "Failed to create sysfs platform attribute group (%d)\n", ret);
 
 	/* Synchronize CPU governor and QoS for initial detected profile */
 	if (data->has_amd_pstate)

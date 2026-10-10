@@ -68,7 +68,7 @@ struct minisforum_data {
 	struct device *hwmon_dev;
 	const struct minisforum_board_config *board;
 	enum platform_profile_option current_profile;
-	struct mutex lock;
+	struct mutex lock; /* Protects EC communication and state transitions */
 	bool fan_manual;
 	u8 fan_target_code;
 	u8 fan_desired_code;
@@ -87,12 +87,18 @@ struct minisforum_data {
 /* Subsystem Interface Prototypes */
 int minisforum_profile_init(struct minisforum_data *data);
 void minisforum_profile_exit(struct minisforum_data *data);
-void minisforum_profile_sync_cpufreq(struct minisforum_data *data, enum platform_profile_option profile);
+void minisforum_profile_sync_cpufreq(struct minisforum_data *data,
+				     enum platform_profile_option profile);
 void minisforum_profile_check_governor(struct minisforum_data *data);
 
 int minisforum_hwmon_init(struct minisforum_data *data);
 void minisforum_hwmon_exit(struct minisforum_data *data);
-int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data, enum platform_profile_option profile);
+int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data,
+					 enum platform_profile_option profile);
+
+/* ACPI CPPC / cpufreq preference symbol */
+ssize_t store_energy_performance_preference(struct cpufreq_policy *policy,
+					    const char *buf, size_t count);
 
 /* Safe EC helpers */
 int minisforum_ec_read(u8 addr, u8 *val);

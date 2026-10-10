@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Minisforum Hardware Monitoring Driver (HWMON)
  *
@@ -141,7 +141,7 @@ static int mf_read_fan_rpm(struct minisforum_data *data, u16 addr_lo, u16 addr_h
 		mf_sio_sram_read(addr_lo, &lo2);
 		if (lo1 == lo2)
 			break;
-		udelay(10);
+		usleep_range(10, 25);
 	}
 
 	mf_sio_exit();
@@ -227,10 +227,7 @@ static void mf_fan_worker(struct work_struct *work)
 	if (data->fan_manual)
 		goto reschedule;
 
-	/*
-	 * Determine ideal fan target code based on active profile:
-	 * Code 6 (~550-600 RPM) is the rock-solid inaudible idle floor.
-	 */
+	/* Determine fan speed target code for the active profile */
 	switch (data->current_profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
 		if (eff_temp <= 48)
@@ -302,9 +299,8 @@ static void mf_fan_worker(struct work_struct *work)
 		data->cooldown_timer = 0;
 	}
 
-	if (next_code != current_code) {
+	if (next_code != current_code)
 		mf_apply_fan_code(data, next_code);
-	}
 
 	/* Periodically check if cpufreq governor changed externally */
 	minisforum_profile_check_governor(data);
@@ -313,7 +309,8 @@ reschedule:
 	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
 }
 
-int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data, enum platform_profile_option profile)
+int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data,
+					 enum platform_profile_option profile)
 {
 	data->cooldown_timer = 0;
 	/* Trigger immediate re-evaluation on profile switch */
@@ -325,17 +322,18 @@ static int mf_set_fan_manual(struct minisforum_data *data, bool manual)
 {
 	if (manual) {
 		u8 code = data->fan_target_code;
+
 		if (code == 0)
 			code = 6;
 		data->fan_manual = true;
 		return mf_apply_fan_code(data, code);
-	} else {
-		data->fan_manual = false;
-		data->cooldown_timer = 0;
-		mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
-		dev_info(&data->pdev->dev, "CPU Fan restored to autonomous dynamic governor\n");
-		return 0;
 	}
+
+	data->fan_manual = false;
+	data->cooldown_timer = 0;
+	mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
+	dev_info(&data->pdev->dev, "CPU Fan restored to autonomous dynamic governor\n");
+	return 0;
 }
 
 static int mf_set_fan_pwm(struct minisforum_data *data, long pwm)
@@ -433,7 +431,8 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	case hwmon_pwm:
 		switch (attr) {
 		case hwmon_pwm_input:
-			*val = clamp_val(DIV_ROUND_CLOSEST((long)data->fan_target_code * MF_HWMON_PWM_MAX,
+			*val = clamp_val(DIV_ROUND_CLOSEST((long)data->fan_target_code *
+							   MF_HWMON_PWM_MAX,
 							   MF_MAX_FAN_CODE),
 					 0, MF_HWMON_PWM_MAX);
 			return 0;

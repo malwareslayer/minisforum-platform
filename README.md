@@ -246,13 +246,13 @@ When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=activ
 
 | ACPI Platform Profile | CPPC EPP Hint | In-Kernel Frequency QoS Range | Behavior & Architecture |
 | :--- | :--- | :--- | :--- |
-| **`low-power`** | `power` (0xFF) | **1.6 GHz – 2.8 GHz** | Snappy baseline floor eliminates UI lag; capped at 2.8 GHz for whisper silence and low power draw. |
-| **`balanced`** | `balance_performance` (0x80) | **1.6 GHz – 5.26 GHz Max Boost** | Fluid, buttery-smooth 1.6 GHz floor prevents C-state wake stutter; scales freely up to 5.26 GHz boost. |
-| **`performance`** | `performance` (0x00) | **2.8 GHz – 5.26 GHz Max Boost** | Immediate high-clock responsiveness with 2.8 GHz floor for peak single/multi-core throughput. |
+| **`low-power`** | `power` (0xFF) | **1.75 GHz – 2.8 GHz** | Responsive 1.75 GHz baseline floor eliminates UI latency; capped at 2.8 GHz for whisper silence and low power draw. |
+| **`balanced`** | `balance_performance` (0x80) | **1.75 GHz – 5.26 GHz Max Boost** | Smooth 1.75 GHz baseline floor prevents C-state wake stutter; scales dynamically up to 5.26 GHz boost. |
+| **`performance`** | `performance` (0x00) | **2.63 GHz – 5.26 GHz Max Boost** | Immediate high-clock responsiveness with 2.63 GHz floor for peak single/multi-core throughput. |
 
-#### Pure Native In-Kernel Architecture (No Userspace Helpers)
+#### In-Kernel Architecture
 
-Unlike drivers that spawn external shell subprocesses (`call_usermodehelper`), `minisforum-platform` executes **100% inside the Linux kernel**:
+The driver interacts directly with the Linux kernel subsystems:
 * Uses the kernel's **Frequency Quality of Service (QoS)** framework (`freq_qos_add_request` / `freq_qos_update_request`) to enforce hardware constraints across all CPUs in $< 1\text{ ms}$.
 * Uses **CPPC EPP** (`cppc_set_epp` and `store_energy_performance_preference`) to adjust AMD autonomous hardware energy performance preferences natively.
 
@@ -277,15 +277,15 @@ If the driver is loaded on hardware without active AMD P-State (e.g. an Intel ma
 You can customize frequency brackets per profile on the fly via sysfs:
 
 ```bash
-# Customize Low-Power frequency brackets (e.g. 1.6 GHz - 2.8 GHz)
-echo 1600000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_min
+# Customize Low-Power frequency brackets (e.g. 1.75 GHz - 2.8 GHz)
+echo 1754353 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_min
 echo 2800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_max
 
-# Customize Balanced baseline floor (e.g. 1.8 GHz for even more responsiveness)
-echo 1800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_min
+# Customize Balanced baseline floor
+echo 1754353 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_min
 
-# Customize Performance baseline floor (e.g. 3.0 GHz)
-echo 3000000 | sudo tee /sys/devices/platform/minisforum_platform/freq_performance_min
+# Customize Performance baseline floor (e.g. 2.63 GHz)
+echo 2631530 | sudo tee /sys/devices/platform/minisforum_platform/freq_performance_min
 
 # Disable autonomous cpufreq management if you prefer manual cpupower control
 echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
@@ -296,7 +296,7 @@ echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
 You can configure persistent defaults in `/etc/modprobe.d/minisforum_platform.conf`:
 
 ```ini
-options minisforum_platform freq_low_power_min=1600000 freq_low_power_max=2800000 freq_balanced_min=1600000 freq_performance_min=2800000
+options minisforum_platform freq_low_power_min=1754353 freq_low_power_max=2800000 freq_balanced_min=1754353 freq_performance_min=2631530
 ```
 
 ---
