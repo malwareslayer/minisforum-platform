@@ -7,14 +7,14 @@ arch=('x86_64')
 url="https://github.com/malwareslayer/minisforum-platform"
 license=('GPL-2.0-or-later')
 depends=('dkms')
-source=("${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
+source=("${url}/releases/download/v${pkgver}/minisforum-platform-v${pkgver}.tar.gz")
+sha256sums=('78683b442250c278670e7a5cd8a4e4f603cba3be403b1b331bd83cc51a581faa')
 
 package() {
     local dkms_dir="${pkgdir}/usr/src/minisforum_platform-${pkgver}"
     install -dm755 "${dkms_dir}"
 
-    cd "minisforum-platform-${pkgver}"
+    cd "minisforum-platform-v${pkgver}"
     cp -r Makefile dkms.conf src "${dkms_dir}/"
 
     sed -i "s/PACKAGE_VERSION=\".*\"/PACKAGE_VERSION=\"${pkgver}\"/" "${dkms_dir}/dkms.conf"
