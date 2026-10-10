@@ -186,6 +186,6 @@ module_init(minisforum_init);
 module_exit(minisforum_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("MalwareSlayer");
+MODULE_AUTHOR("Dwi Mulia Mokoginta <dwi-mulia-mokoginta@protonmail.com>");
 MODULE_DESCRIPTION("Minisforum Linux Platform Driver");
 MODULE_VERSION(DRV_VERSION);
