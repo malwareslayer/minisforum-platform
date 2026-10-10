@@ -75,11 +75,14 @@ struct minisforum_data {
 	struct delayed_work fan_work;
 	int temp_ema;
 	int cooldown_timer;
+	struct work_struct cpufreq_work;
+	enum platform_profile_option pending_profile;
 };
 
 /* Subsystem Interface Prototypes */
 int minisforum_profile_init(struct minisforum_data *data);
 void minisforum_profile_exit(struct minisforum_data *data);
+void minisforum_profile_sync_cpufreq(struct minisforum_data *data, enum platform_profile_option profile);
 
 int minisforum_hwmon_init(struct minisforum_data *data);
 void minisforum_hwmon_exit(struct minisforum_data *data);

@@ -307,14 +307,14 @@ static void mf_fan_worker(struct work_struct *work)
 	}
 
 reschedule:
-	schedule_delayed_work(&data->fan_work, msecs_to_jiffies(1000));
+	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
 }
 
 int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data, enum platform_profile_option profile)
 {
 	data->cooldown_timer = 0;
 	/* Trigger immediate re-evaluation on profile switch */
-	mod_delayed_work(system_wq, &data->fan_work, 0);
+	mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
 	return 0;
 }
 
@@ -329,7 +329,7 @@ static int mf_set_fan_manual(struct minisforum_data *data, bool manual)
 	} else {
 		data->fan_manual = false;
 		data->cooldown_timer = 0;
-		mod_delayed_work(system_wq, &data->fan_work, 0);
+		mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
 		dev_info(&data->pdev->dev, "CPU Fan restored to autonomous dynamic governor\n");
 		return 0;
 	}
@@ -540,7 +540,7 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 
 	/* Initialize and start the dynamic governor workqueue */
 	INIT_DELAYED_WORK(&data->fan_work, mf_fan_worker);
-	schedule_delayed_work(&data->fan_work, msecs_to_jiffies(1000));
+	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
 
 	data->hwmon_dev = hwmon_device_register_with_info(&data->pdev->dev,
 							  "minisforum",

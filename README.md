@@ -238,7 +238,50 @@ The **Power Mode** slider will appear natively in the top-right Quick Settings m
 
 ---
 
-### 2. Hardware Monitoring (Sensors)
+### 2. Autonomous CPU Governor & Frequency Coordination (`amd-pstate=guided`)
+
+When running modern AMD processors with `amd-pstate=guided`, standard Linux platform profile switches only adjust EC TDP without changing CPU frequency scaling governors. If left on `powersave`, the CPU gets pinned to its minimum base frequency (~1.11 GHz) and never scales up under load.
+
+`minisforum-platform` automatically synchronizes cpufreq governors and frequency scaling limits across all CPU cores when the platform profile changes:
+
+| ACPI Platform Profile | Default Governor | Behavior & Frequency Scaling |
+| :--- | :--- | :--- |
+| **`low-power`** | `powersave` | Pinned to ~1.11 GHz floor for maximum battery/power efficiency and silent operation. |
+| **`balanced`** | `schedutil` | Dynamic autonomous scaling based on kernel scheduler load (scales dynamically from 1.11 GHz to boost). |
+| **`performance`** | `performance` | High-performance scaling for maximum single/multi-core throughput. |
+
+#### Customizing Governors & Frequency Limits at Runtime
+
+You can change governors (e.g. `ondemand`, `conservative`, `userspace`) or cap maximum frequencies per profile via sysfs on the fly:
+
+```bash
+# Set Balanced profile governor to ondemand or schedutil
+echo "schedutil" | sudo tee /sys/devices/platform/minisforum_platform/gov_balanced
+
+# Set Performance profile governor to conservative or performance
+echo "conservative" | sudo tee /sys/devices/platform/minisforum_platform/gov_performance
+
+# Cap Balanced profile to 4.2 GHz (4200000 kHz)
+echo 4200000 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_max
+
+# Restore unconstrained maximum frequency (0 = default cpuinfo_max_freq)
+echo 0 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_max
+
+# Disable autonomous cpufreq management if you prefer manual cpupower control
+echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
+```
+
+#### Persistent Configuration via Modprobe
+
+You can configure persistent defaults in `/etc/modprobe.d/minisforum_platform.conf`:
+
+```ini
+options minisforum_platform gov_balanced="schedutil" gov_performance="performance" gov_low_power="powersave" freq_low_power_max=2500000
+```
+
+---
+
+### 3. Hardware Monitoring (Sensors)
 
 View temperature sensors and live fan speeds directly using `sensors`:
 
@@ -257,7 +300,7 @@ pwm1:             22%
 
 ---
 
-### 3. Dynamic Thermal Governor & Fan Control
+### 4. Dynamic Thermal Governor & Fan Control
 
 The driver includes an in-kernel autonomous thermal governor that eliminates the noisy, jumpy factory BIOS curves:
 
