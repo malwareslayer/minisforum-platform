@@ -18,6 +18,8 @@
 #include <linux/acpi.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
+#include <linux/pm_qos.h>
+#include <acpi/cppc_acpi.h>
 
 #define DRV_NAME	"minisforum_platform"
 #define DRV_VERSION	"0.1.0"
@@ -75,8 +77,9 @@ struct minisforum_data {
 	struct delayed_work fan_work;
 	int temp_ema;
 	int cooldown_timer;
-	struct work_struct cpufreq_work;
-	enum platform_profile_option pending_profile;
+	struct freq_qos_request *qos_min_req;
+	struct freq_qos_request *qos_max_req;
+	bool qos_initialized;
 	bool sync_in_progress;
 	bool has_amd_pstate;
 };

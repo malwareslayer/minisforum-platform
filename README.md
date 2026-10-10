@@ -242,44 +242,50 @@ The **Power Mode** slider will appear natively in the top-right Quick Settings m
 
 When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=active`, standard Linux platform profile switches only adjust EC TDP without changing CPU frequency scaling governors. If left on generic `powersave`, the CPU gets pinned to its minimum base frequency (~1.11 GHz) with zero dynamic scaling, causing desktop micro-stutters.
 
-`minisforum-platform` intelligently synchronizes cpufreq governors, frequency scaling brackets, and EPP hints across all CPU cores with **bidirectional synchronization**:
+`minisforum-platform` intelligently synchronizes cpufreq policies and CPPC EPP hints directly in-kernel via official Linux kernel interfaces (`freq_qos_*` and `cppc_set_epp`) with **zero userspace helpers / zero shell subprocesses**:
 
-| ACPI Platform Profile | Default Governor | Dynamic Frequency Range | Behavior & Architecture |
+| ACPI Platform Profile | CPPC EPP Hint | In-Kernel Frequency QoS Range | Behavior & Architecture |
 | :--- | :--- | :--- | :--- |
-| **`low-power`** | `schedutil` | **1.9 GHz – 2.9 GHz** *(ThinkPad-style)* | Scales dynamically within a smooth, low-power bracket. Never drops to 1.1 GHz (zero UI lag) and never boosts above 2.9 GHz (whisper quiet, cold thermal profile). |
-| **`balanced`** | `schedutil` | **Base Floor – Max Boost** | Dynamic autonomous scaling based on kernel scheduler load. Idles down deeply to save power, scales up to 5.2 GHz instantaneously on demand. |
-| **`performance`** | `performance` | **2.8 GHz – Max Boost** | Aggressive high-clock profile with 2.8 GHz baseline floor for minimum latency and peak throughput. |
+| **`low-power`** | `power` (0xFF) | **1.6 GHz – 2.8 GHz** | Snappy baseline floor eliminates UI lag; capped at 2.8 GHz for whisper silence and low power draw. |
+| **`balanced`** | `balance_performance` (0x80) | **1.6 GHz – 5.26 GHz Max Boost** | Fluid, buttery-smooth 1.6 GHz floor prevents C-state wake stutter; scales freely up to 5.26 GHz boost. |
+| **`performance`** | `performance` (0x00) | **2.8 GHz – 5.26 GHz Max Boost** | Immediate high-clock responsiveness with 2.8 GHz floor for peak single/multi-core throughput. |
+
+#### Pure Native In-Kernel Architecture (No Userspace Helpers)
+
+Unlike drivers that spawn external shell subprocesses (`call_usermodehelper`), `minisforum-platform` executes **100% inside the Linux kernel**:
+* Uses the kernel's **Frequency Quality of Service (QoS)** framework (`freq_qos_add_request` / `freq_qos_update_request`) to enforce hardware constraints across all CPUs in $< 1\text{ ms}$.
+* Uses **CPPC EPP** (`cppc_set_epp` and `store_energy_performance_preference`) to adjust AMD autonomous hardware energy performance preferences natively.
 
 #### Bidirectional Governor & Profile Synchronization
 
 Synchronization is fully bidirectional:
-* **Profile to Governor:** Changing the ACPI platform profile (via GNOME Quick Settings, KDE Plasma, or `powerprofilesctl`) automatically applies the appropriate governor, frequency brackets, and EPP hints.
-* **Governor to Profile:** If an external utility (e.g. `tlp`, `tuned`, GameMode, or a custom script) changes the CPU governor:
-  * Switching to `powersave` $\rightarrow$ automatically aligns the platform profile to **`low-power`** (EC Quiet 35W).
+* **Profile to Hardware:** Changing the ACPI platform profile (via GNOME Quick Settings, KDE Plasma, or `powerprofilesctl`) automatically applies the appropriate QoS frequency brackets, EPP hints, and EC TDP.
+* **Policy to Profile:** If an external utility (e.g. `tlp`, `tuned`, GameMode, or a custom script) changes policy constraints:
+  * Switching to `powersave` (capped) $\rightarrow$ automatically aligns the platform profile to **`low-power`** (EC Quiet 35W).
   * Switching to `performance` $\rightarrow$ automatically aligns the platform profile to **`performance`** (EC Turbo 65W).
-  * Switching to `schedutil` / `ondemand` $\rightarrow$ automatically aligns the platform profile to **`balanced`** (EC Balanced 54W).
-  * Sends native `platform_profile_notify()` events so desktop UI sliders update in real time.
+  * Switching to `schedutil` / `balance_performance` $\rightarrow$ automatically aligns the platform profile to **`balanced`** (EC Balanced 54W).
+  * Emits native `platform_profile_notify()` events so desktop UI sliders update in real time.
 
 #### Non-AMD P-State Fallback
 
 If the driver is loaded on hardware without active AMD P-State (e.g. an Intel machine or unsupported CPU architecture):
-* Autonomous cpufreq overrides are automatically disabled (`manage_cpufreq = false`).
+* Autonomous cpufreq QoS is automatically disabled (`manage_cpufreq = false`).
 * Fan control safely preserves the factory BIOS autonomous curve, leaving hardware thermal management under default BIOS control.
 
-#### Customizing Governors & Frequency Limits at Runtime
+#### Customizing Frequency Brackets at Runtime
 
-You can adjust governors or customize frequency brackets per profile on the fly via sysfs:
+You can customize frequency brackets per profile on the fly via sysfs:
 
 ```bash
-# Customize Low-Power frequency brackets (e.g. 1.8 GHz - 3.0 GHz)
-echo 1800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_min
-echo 3000000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_max
+# Customize Low-Power frequency brackets (e.g. 1.6 GHz - 2.8 GHz)
+echo 1600000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_min
+echo 2800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_max
 
-# Change Balanced profile governor (e.g. ondemand or schedutil)
-echo "schedutil" | sudo tee /sys/devices/platform/minisforum_platform/gov_balanced
+# Customize Balanced baseline floor (e.g. 1.8 GHz for even more responsiveness)
+echo 1800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_min
 
-# Change Performance profile governor (e.g. conservative or performance)
-echo "conservative" | sudo tee /sys/devices/platform/minisforum_platform/gov_performance
+# Customize Performance baseline floor (e.g. 3.0 GHz)
+echo 3000000 | sudo tee /sys/devices/platform/minisforum_platform/freq_performance_min
 
 # Disable autonomous cpufreq management if you prefer manual cpupower control
 echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
@@ -290,7 +296,7 @@ echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
 You can configure persistent defaults in `/etc/modprobe.d/minisforum_platform.conf`:
 
 ```ini
-options minisforum_platform gov_low_power="schedutil" freq_low_power_min=1900000 freq_low_power_max=2900000 gov_balanced="schedutil" gov_performance="performance" freq_performance_min=2800000
+options minisforum_platform freq_low_power_min=1600000 freq_low_power_max=2800000 freq_balanced_min=1600000 freq_performance_min=2800000
 ```
 
 ---
