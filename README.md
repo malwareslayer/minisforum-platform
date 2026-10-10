@@ -11,15 +11,144 @@ This driver bridges missing OEM platform features on Linux through a clean, modu
 
 ---
 
-## Supported Hardware
+## Hardware Compatibility Matrix
 
-| Device | Board Model | APU / Processor | Status |
-| :--- | :--- | :--- | :--- |
-| **Minisforum UM790 Pro** | `F7BSC` | AMD Ryzen 9 7940HS | Tested & Verified |
-| **Minisforum UM780 XTX** | `F7BSD` | AMD Ryzen 7 7840HS | Supported |
-| **Minisforum UM880 Pro** | `F7BSI` | AMD Ryzen 7 8845HS | Supported |
-| **Minisforum UM890 Pro** | `F7BSW` | AMD Ryzen 9 8945HS | Supported |
-| **Other UM-Series** | *Any* | AMD Phoenix / Hawk Point | Supported via Generic EC fallback |
+### Supported Models (Out of the Box)
+
+| Device | Board Model | APU / Processor | Status | Fan / TDP Features |
+| :--- | :--- | :--- | :--- | :--- |
+| **Minisforum UM790 Pro** | `F7BSC` | AMD Ryzen 9 7940HS | Tested & Verified | Dynamic Gov, Tachometer, TDP Profile |
+| **Minisforum UM780 XTX** | `F7BSD` | AMD Ryzen 7 7840HS | Supported | Dynamic Gov, Tachometer, TDP Profile |
+| **Minisforum UM880 Pro** | `F7BSI` | AMD Ryzen 7 8845HS | Supported | Dynamic Gov, Tachometer, TDP Profile |
+| **Minisforum UM890 Pro** | `F7BSW` | AMD Ryzen 9 8945HS | Supported | Dynamic Gov, Tachometer, TDP Profile |
+| **Other UM-Series (AMD APU)** | *Any F7BSx* | AMD Phoenix / Hawk Point | Generic Fallback | Dynamic Gov, Tachometer, TDP Profile |
+
+---
+
+### Unsupported / Untested Models & Technical Reasons
+
+Minisforum produces a diverse variety of Mini-PCs and motherboards across Intel, AMD dGPU, and desktop form factors. The table below details which series are currently **not supported** or **untested**, along with the underlying hardware architecture differences:
+
+| Series / Model | Processor Architecture | Super I/O / EC Controller | Compatibility Status | Technical Reason |
+| :--- | :--- | :--- | :--- | :--- |
+| **Workstation Series**<br>(MS-01, MS-A1) | Intel Core 12th/13th Gen<br>or AMD AM5 Desktop | Nuvoton NCT6687D / ITE IT8613E | ❌ **Unsupported (Intel)**<br>⚠️ **Untested (MS-A1)** | Intel MS-01 uses desktop Nuvoton SIO and standard Intel DPTF/ACPI thermal zones, completely lacking the ITE IT5571 indirect SRAM layout. MS-A1 (AMD) may share EC similarities but requires testing. |
+| **Intel Mini-PC Series**<br>(NPB5, NPB7, NAB6, NAB9, UN1265) | Intel Core i5/i7/i9 (Raptor/Alder Lake) | Nuvoton / ITE IT8613E | ❌ **Unsupported** | Different EC vendor and memory mapping. Fan curves and power limits are governed by Intel ACPI PECI/DPTF methods rather than laptop EC registers. |
+| **Neptune dGPU Series**<br>(HX99G, HX100G, HX77G, G7 PT) | AMD Ryzen + Radeon RX 6600M / 6650M / 7600M XT | ITE IT8987 / Proprietary Dual EC | ⚠️ **Untested / Incompatible** | Features dual independent cooling systems (dedicated CPU blower + dedicated discrete GPU blower). Requires separate register offsets for GPU fan curve tables and dual tachometers. |
+| **MoDT Mini-ITX Boards**<br>(BD770i, BD790i, AR900i) | Mobile-on-Desktop AMD Ryzen / Intel Core | Desktop Super I/O (NCT6796D / IT8686E) | ❌ **Not Applicable** | Standard desktop Mini-ITX motherboards with 4-pin desktop PWM fan headers. Supported natively in the upstream Linux kernel via `nct6687` or `it87` drivers. |
+| **Ultra-Portable / Handhelds**<br>(EM680, EM780, V3 Tablet) | AMD Ryzen 7 6800U / 7840U / 8840U | ITE IT5570 / Custom USB-PD EC | ⚠️ **Untested (Experimental)** | Ultra-compact single-fan chassis governed by tight USB Type-C Power Delivery contracts. May share IT5570 registers, but thermal tables have different limits. |
+| **Older AMD Venus Series**<br>(UM560, UM590, UM690, HM90) | AMD Ryzen 5000 / 6000 (Cezanne / Rembrandt) | ITE IT8528 / Legacy ITE EC | ⚠️ **Untested** | Older EC firmware generations that do not implement the `F7BSx` table format at ACPI `0x2F` / `0x0310`. |
+
+---
+
+## Technical Prerequisites (Compatibility Checklist)
+
+For a Minisforum machine to be compatible with this driver, it must satisfy the following hardware requirements:
+
+1. **Processor Platform:** AMD Ryzen Mobile / APU (Phoenix, Hawk Point, or newer Strix Point architectures).
+2. **Embedded Controller (EC):**
+   * **ITE IT5571E or IT5570E** Super I/O Embedded Controller.
+   * Standard ACPI EC communication ports: Data port `0x62`, Command port `0x66`.
+   * Super I/O indirect SRAM ports: Index port `0x2E`, Data port `0x2F` (accessed via ITE SMFI indirect addressing).
+3. **Firmware Register Layout:**
+   * **ACPI EC Address Space:**
+     * `0x02` & `0x03`: EC Major & Minor Firmware Version.
+     * `0x04`: VRM Temperature sensor (°C).
+     * `0x05`: Motherboard Temperature sensor (°C).
+     * `0x09`: CPU Die Temperature sensor (°C).
+     * `0x2F`: CPU Platform Profile / TDP selector (`0x00` Quiet, `0xB1` Balanced, `0xB2` Performance).
+   * **Super I/O SMFI XRAM Address Space:**
+     * `0x0310 - 0x0322`: 7-band CPU fan base speed lookup table.
+     * `0x08B0 - 0x08B6`: 7-band CPU fan slope lookup table.
+     * `0x181E - 0x181F`: 16-bit CPU Fan tachometer counter (sampled at 2.156 MHz).
+
+---
+
+## Experimental Testing Guide for Other / New Minisforum Hardware
+
+If you own an unlisted Minisforum Mini-PC (or a newly released model) and want to test compatibility or contribute hardware quirks, follow this step-by-step workflow:
+
+### Step 1: Identify Your Motherboard Model & DMI
+
+Check the hardware identification strings reported by your BIOS:
+
+```bash
+sudo dmidecode -s baseboard-product-name
+# Examples: F7BSC (UM790 Pro), F7BSD (UM780 XTX), F7BSI (UM880 Pro)
+
+sudo dmidecode -s system-product-name
+# Example: UM790 Pro
+```
+
+### Step 2: Load the Driver Experimentally (`force_load=1`)
+
+If your motherboard model is not yet in the official DMI quirk table, bypass the detection check using the `force_load` module parameter:
+
+```bash
+sudo modprobe minisforum_platform force_load=1
+```
+
+Check the kernel buffer to confirm initialization:
+
+```bash
+sudo dmesg | grep -i minisforum
+```
+
+You should see:
+```text
+minisforum_platform: FORCED LOAD requested via module parameter! Experimental mode active on unlisted hardware.
+platform minisforum_platform: Platform profile registered successfully
+platform minisforum_platform: HWMON sensors and Dynamic Thermal Governor registered
+```
+
+### Step 3: Verify Subsystem Responses
+
+1. **Check Hardware Monitoring:**
+   ```bash
+   sensors minisforum-isa-0000
+   ```
+   * Do the CPU, Motherboard, and VRM temperatures report realistic non-zero values (e.g. 35°C – 70°C)?
+   * Does the CPU Fan show a valid RPM reading (e.g. 500 – 2000 RPM)?
+
+2. **Check Platform Profile Switching:**
+   ```bash
+   cat /sys/firmware/acpi/platform_profile_choices
+   echo "performance" | sudo tee /sys/firmware/acpi/platform_profile
+   cat /sys/firmware/acpi/platform_profile
+   ```
+
+### Step 4: Advanced EC Register Inspection & Dumping
+
+To verify whether your machine uses the standard Minisforum EC memory layout, you can inspect the ACPI EC registers using the Linux kernel's `ec_sys` debug interface:
+
+```bash
+# Load ec_sys with write support (allows reading debugfs io)
+sudo modprobe ec_sys write_support=1
+
+# Read the first 64 bytes of EC RAM
+sudo hexdump -C /sys/kernel/debug/ec/ec0/io | head -n 4
+```
+
+Look for:
+* Offsets `0x02` and `0x03`: Should contain EC version bytes (e.g. `01 0c` for v1.12).
+* Offsets `0x04`, `0x05`, `0x09`: Should contain fluctuating temperature bytes in hex (e.g., `0x28` = 40°C).
+* Offset `0x2F`: Should reflect the profile code (`0x00`, `0xB1`, or `0xB2`).
+
+### Step 5: Contributing Support for Your Model
+
+If `force_load=1` works on your Minisforum machine, you can contribute permanent support:
+
+1. Note the output of `sudo dmidecode -s baseboard-product-name`.
+2. Add your board to `mf_dmi_table` in `src/minisforum_core.c`:
+   ```c
+   {
+       .ident = "Minisforum YourModel",
+       .matches = {
+           DMI_MATCH(DMI_BOARD_NAME, "YOUR_BOARD_NAME"),
+       },
+       .driver_data = (void *)&board_um790_pro,
+   },
+   ```
+3. Submit a Pull Request or open an Issue on GitHub with your `dmidecode` output and `sensors` log!
 
 ---
 
