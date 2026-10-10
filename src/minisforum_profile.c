@@ -81,7 +81,6 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 	for_each_online_cpu(cpu) {
 		struct cpufreq_policy *policy;
 		unsigned int target_min, target_max;
-		const char *target_epp_str;
 		u64 target_epp, cpu_perf = 0;
 		bool is_gold = false, is_silver = false;
 
@@ -96,13 +95,10 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 		case PLATFORM_PROFILE_LOW_POWER:
 			target_min = freq_low_power_min;
 			target_max = freq_low_power_max;
-			if (is_gold) {
+			if (is_gold)
 				target_epp = 0x80;
-				target_epp_str = "balance_performance";
-			} else {
+			else
 				target_epp = 0xC0;
-				target_epp_str = "balance_power";
-			}
 			break;
 
 		case PLATFORM_PROFILE_BALANCED:
@@ -111,11 +107,9 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 			if (is_gold) {
 				target_min = max(freq_balanced_min, 2200000U);
 				target_epp = 0x00;
-				target_epp_str = "performance";
 			} else {
 				target_min = freq_balanced_min;
 				target_epp = 0x80;
-				target_epp_str = "balance_performance";
 			}
 			break;
 
@@ -125,11 +119,9 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 			if (is_gold || is_silver || cpu < nr_cpu_ids / 2) {
 				target_min = freq_performance_min;
 				target_epp = 0x00;
-				target_epp_str = "performance";
 			} else {
 				target_min = max(freq_balanced_min, 2200000U);
 				target_epp = 0x80;
-				target_epp_str = "balance_performance";
 			}
 			break;
 
@@ -149,9 +141,6 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 			    profile != PLATFORM_PROFILE_LOW_POWER)
 				cpufreq_boost_set_sw(policy, 1);
 
-			store_energy_performance_preference(policy,
-							    target_epp_str,
-							    strlen(target_epp_str));
 			cpufreq_cpu_put(policy);
 		}
 	}

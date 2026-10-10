@@ -94,10 +94,6 @@ void minisforum_hwmon_exit(struct minisforum_data *data);
 int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data,
 					 enum platform_profile_option profile);
 
-/* ACPI CPPC / cpufreq preference symbol */
-ssize_t store_energy_performance_preference(struct cpufreq_policy *policy,
-					    const char *buf, size_t count);
-
 /* Safe EC helpers */
 int minisforum_ec_read(u8 addr, u8 *val);
 int minisforum_ec_write(u8 addr, u8 val);
