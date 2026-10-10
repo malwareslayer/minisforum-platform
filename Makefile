@@ -6,7 +6,7 @@ KVERSION ?= $(shell uname -r)
 KDIR ?= /lib/modules/$(KVERSION)/build
 PWD := $(shell pwd)
 
-VERSION := 0.1.0
+VERSION := 0.2.0
 DKMS_DIR := /usr/src/$(MODULE_NAME)-$(VERSION)
 
 .PHONY: all modules clean install load unload dkms-install dkms-uninstall

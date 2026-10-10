@@ -1,0 +1,22 @@
+# Maintainer: Dwi Mulia Mokoginta <dwi-mulia-mokoginta@protonmail.com>
+pkgname=minisforum-platform-dkms
+pkgver=0.2
+pkgrel=1
+pkgdesc="Linux platform & hardware monitoring driver for Minisforum UM790 Pro (Venus series) with in-kernel CPPC QoS and EC fan control"
+arch=('x86_64')
+url="https://github.com/malwareslayer/minisforum-platform"
+license=('GPL-2.0-or-later')
+depends=('dkms')
+source=("${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    local dkms_dir="${pkgdir}/usr/src/minisforum_platform-${pkgver}"
+    install -dm755 "${dkms_dir}"
+
+    cd "minisforum-platform-${pkgver}"
+    cp -r Makefile dkms.conf src "${dkms_dir}/"
+
+    sed -i "s/PACKAGE_VERSION=\".*\"/PACKAGE_VERSION=\"${pkgver}\"/" "${dkms_dir}/dkms.conf"
+    sed -i "s/VERSION := .*/VERSION := ${pkgver}/" "${dkms_dir}/Makefile"
+}

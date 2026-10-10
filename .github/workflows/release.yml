@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Prepare Release Archives
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE_BASE="minisforum-platform-${VERSION}"
+
+          # Create clean distribution directory
+          mkdir -p "/tmp/${ARCHIVE_BASE}"
+          rsync -av --exclude='.git' --exclude='.github' --exclude='*.o' --exclude='*.ko*' --exclude='.idea' ./ "/tmp/${ARCHIVE_BASE}/"
+
+          # Package tar.gz and zip
+          tar -czf "${ARCHIVE_BASE}.tar.gz" -C /tmp "${ARCHIVE_BASE}"
+          (cd /tmp && zip -r "${GITHUB_WORKSPACE}/${ARCHIVE_BASE}.zip" "${ARCHIVE_BASE}")
+
+          # Generate SHA256 checksums
+          sha256sum "${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}.zip" > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            minisforum-platform-*.tar.gz
+            minisforum-platform-*.zip
+            sha256sums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false

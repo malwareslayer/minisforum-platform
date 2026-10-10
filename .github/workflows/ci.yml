@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  checkpatch:
+    name: Checkpatch Style Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Kernel Scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-headers-generic perl wget
+
+      - name: Run checkpatch.pl --strict
+        run: |
+          wget -q https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
+          wget -q https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
+          chmod +x checkpatch.pl
+          ./checkpatch.pl --strict --no-tree -f src/*.[ch]
+
+  build:
+    name: Compile Kernel Module
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential linux-headers-generic dkms
+
+      - name: Build Module
+        run: |
+          make clean
+          make modules
+
+      - name: Verify DKMS Packaging
+        run: |
+          sudo make dkms-install
+          sudo make dkms-uninstall
