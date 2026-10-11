@@ -227,50 +227,48 @@ static void mf_fan_worker(struct work_struct *work)
 	if (data->fan_manual)
 		goto reschedule;
 
-	/* Determine fan speed target code for the active profile */
+	/* Determine fan speed target code with continuous gradual interpolation */
 	switch (data->current_profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
-		if (eff_temp <= 48)
-			desired_code = 6;  /* ~550-600 RPM silent idle */
-		else if (eff_temp <= 56)
-			desired_code = 8;  /* ~800 RPM */
-		else if (eff_temp <= 66)
-			desired_code = 12; /* ~1200 RPM */
-		else if (eff_temp <= 78)
-			desired_code = 18; /* ~1800 RPM */
+		if (eff_temp <= 42)
+			desired_code = 5;  /* ~450-500 RPM ultra-silent idle */
+		else if (eff_temp <= 54)
+			desired_code = 5 + (eff_temp - 42) * 4 / 12; /* 5 -> 9 (~500 -> ~900 RPM) */
+		else if (eff_temp <= 68)
+			desired_code = 9 + (eff_temp - 54) * 6 / 14; /* 9 -> 15 (~900 -> ~1500 RPM) */
+		else if (eff_temp <= 80)
+			desired_code = 15 + (eff_temp - 68) * 8 / 12; /* 15 -> 23 (~1500 -> ~2300 RPM) */
 		else
-			desired_code = 28; /* ~2800 RPM */
+			desired_code = clamp_val(23 + (eff_temp - 80) * 10 / 10, 23, 34);
 		break;
 
 	case PLATFORM_PROFILE_PERFORMANCE:
-		if (eff_temp <= 42)
-			desired_code = 10; /* ~1000 RPM */
+		if (eff_temp <= 38)
+			desired_code = 8;  /* ~800 RPM base */
 		else if (eff_temp <= 50)
-			desired_code = 16; /* ~1600 RPM */
-		else if (eff_temp <= 62)
-			desired_code = 24; /* ~2400 RPM */
-		else if (eff_temp <= 75)
-			desired_code = 34; /* ~3400 RPM */
+			desired_code = 8 + (eff_temp - 38) * 6 / 12;  /* 8 -> 14 (~800 -> ~1450 RPM) */
+		else if (eff_temp <= 66)
+			desired_code = 14 + (eff_temp - 50) * 10 / 16; /* 14 -> 24 (~1450 -> ~2400 RPM) */
+		else if (eff_temp <= 80)
+			desired_code = 24 + (eff_temp - 66) * 12 / 14; /* 24 -> 36 (~2400 -> ~3600 RPM) */
 		else
-			desired_code = 48; /* ~4800 RPM */
+			desired_code = clamp_val(36 + (eff_temp - 80) * 12 / 10, 36, MF_MAX_FAN_CODE);
 		break;
 
 	case PLATFORM_PROFILE_BALANCED:
 	default:
-		if (eff_temp <= 46)
-			desired_code = 6;  /* ~550-600 RPM silent idle */
-		else if (eff_temp <= 53)
-			desired_code = 8;  /* ~800 RPM */
-		else if (eff_temp <= 62)
-			desired_code = 13; /* ~1300 RPM */
-		else if (eff_temp <= 72)
-			desired_code = 19; /* ~1900 RPM */
-		else if (eff_temp <= 82)
-			desired_code = 28; /* ~2800 RPM */
-		else if (eff_temp <= 90)
-			desired_code = 38; /* ~3800 RPM */
+		if (eff_temp <= 40)
+			desired_code = 5;  /* ~450-500 RPM ultra-quiet idle floor */
+		else if (eff_temp <= 50)
+			desired_code = 5 + (eff_temp - 40) * 5 / 10;  /* 5 -> 10 (~500 -> ~1050 RPM gradual ramp) */
+		else if (eff_temp <= 64)
+			desired_code = 10 + (eff_temp - 50) * 7 / 14; /* 10 -> 17 (~1050 -> ~1700 RPM) */
+		else if (eff_temp <= 78)
+			desired_code = 17 + (eff_temp - 64) * 11 / 14; /* 17 -> 28 (~1700 -> ~2800 RPM) */
+		else if (eff_temp <= 88)
+			desired_code = 28 + (eff_temp - 78) * 12 / 10; /* 28 -> 40 (~2800 -> ~4000 RPM) */
 		else
-			desired_code = 48; /* ~4800 RPM */
+			desired_code = clamp_val(40 + (eff_temp - 88) * 8 / 6, 40, MF_MAX_FAN_CODE);
 		break;
 	}
 
@@ -321,7 +319,7 @@ static int mf_set_fan_manual(struct minisforum_data *data, bool manual)
 		u8 code = data->fan_target_code;
 
 		if (code == 0)
-			code = 6;
+			code = 5;
 		data->fan_manual = true;
 		return mf_apply_fan_code(data, code);
 	}
