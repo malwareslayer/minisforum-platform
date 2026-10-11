@@ -124,13 +124,13 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 					freq_balanced_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x40; /* 64 (snappy burst: real-time audio & network softirqs) */
+				target_epp = 0x40; /* 64: snappy burst for audio & network */
 			} else {
 				target_min = freq_balanced_min ?
 					freq_balanced_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x60; /* 96 (responsive balanced: fast ramp without hesitation) */
+				target_epp = 0x60; /* 96: responsive balanced */
 			}
 			break;
 
@@ -179,14 +179,16 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 
 		switch (profile) {
 		case PLATFORM_PROFILE_PERFORMANCE:
-			latency_limit = 10; /* Max 10 µs: C1/POLL only, ultra-low latency */
+			latency_limit = 10; /* Max 10 µs: C1/POLL only */
 			break;
 		case PLATFORM_PROFILE_BALANCED:
-			latency_limit = 100; /* Max 100 µs: allows C1 (1µs) and C2 (18µs), skips C3 (350µs) */
+			/* Max 100 µs: allows C1/C2 (18µs), skips C3 (350µs) */
+			latency_limit = 100;
 			break;
 		case PLATFORM_PROFILE_LOW_POWER:
 		default:
-			latency_limit = PM_QOS_DEFAULT_VALUE; /* Allow C3 deep sleep for maximum power savings */
+			/* Allow C3 deep sleep for maximum power savings */
+			latency_limit = PM_QOS_DEFAULT_VALUE;
 			break;
 		}
 
