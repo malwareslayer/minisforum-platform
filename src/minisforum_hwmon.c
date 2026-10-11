@@ -215,11 +215,21 @@ static void mf_fan_worker(struct work_struct *work)
 	 */
 	comp_temp = ((int)t_cpu * 3 + (int)t_vrm + (int)t_board) / 5;
 
-	/* Exponential Moving Average (EMA) low-pass filter to smooth transient spikes */
-	if (data->temp_ema == 0)
+	/*
+	 * Asymmetric Exponential Moving Average (EMA) low-pass filter:
+	 * - Rapid response on thermal surge (alpha = 0.50) to catch compute/compilation load.
+	 * - Deep damping on cooling / transient Zen 4 spikes (alpha = 0.125) to eliminate fan hunting.
+	 */
+	if (data->temp_ema == 0) {
 		data->temp_ema = comp_temp * 1000;
-	else
-		data->temp_ema = (data->temp_ema * 3 + comp_temp * 1000) / 4;
+	} else {
+		int current_scaled = comp_temp * 1000;
+
+		if (current_scaled > data->temp_ema)
+			data->temp_ema = (data->temp_ema + current_scaled) / 2;
+		else
+			data->temp_ema = (data->temp_ema * 7 + current_scaled) / 8;
+	}
 
 	eff_temp = data->temp_ema / 1000;
 
