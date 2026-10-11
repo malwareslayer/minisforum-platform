@@ -244,17 +244,18 @@ When running modern AMD processors with `amd-pstate=guided` or `amd-pstate=activ
 
 `minisforum-platform` intelligently synchronizes cpufreq policies and CPPC EPP hints directly in-kernel via official Linux kernel interfaces (`freq_qos_*` and `cppc_set_epp`) with **zero userspace helpers / zero shell subprocesses**:
 
-| ACPI Platform Profile | Asymmetric Per-Core CPPC EPP | In-Kernel Frequency QoS Range | Behavior & Architecture |
+| ACPI Platform Profile | Asymmetric 3-Tier CPPC EPP | In-Kernel Frequency QoS Range | Behavior & Architecture |
 | :--- | :--- | :--- | :--- |
-| **`low-power`** | **Gold Cores:** `balance_performance`<br>**Other Cores:** `balance_power` (0xC0) | **1.75 GHz – 2.8 GHz** | Gold cores preserve 1.75 GHz floor to prevent UI lag; background cores enter deep power saving on balance_power; whisper silent. |
-| **`balanced`** | **Gold Cores:** `performance` (0x00)<br>**Other Cores:** `balance_performance` (0x80) | **2.2 GHz (Gold) / 1.75 GHz (Others) – 5.26 GHz Boost** | Asymmetric Preferred Cores: Interactive desktop loads steer to Gold Cores on `performance` for instant 5.26 GHz boost; remaining cores run on `balance_performance` with zero lag and whisper-silent fan (~600 RPM). |
-| **`performance`** | **Primary Cores:** `performance` (0x00)<br>**SMT Threads:** `balance_performance` | **2.63 GHz (Primary) / 2.2 GHz (SMT) – 5.26 GHz Boost** | Blazing throughput; SMT threads avoid pumping excess voltage during non-saturated loads, keeping thermal headroom and fan acoustics optimal. |
+| **`low-power`** | **Gold Cores:** `balance_performance` (0x80)<br>**Silver Cores:** `balance_power` (0xC0)<br>**Standard Cores:** `power` (0xFF) | **Gold:** 1.75 GHz – 3.20 GHz<br>**Silver:** 1.40 GHz – 2.60 GHz<br>**Standard:** 1.20 GHz – 2.00 GHz | Eco 35W TDP profile: Gold cores ensure smooth 120Hz UI and video playback with zero jitter; background tasks throttled to deep power saving; whisper silent (0 dB fan). |
+| **`balanced`** | **Gold Cores:** `performance` (0x00)<br>**Silver Cores:** `balance_performance` (0x80)<br>**Standard Cores:** `default` (0x80) | **Gold:** 2.40 GHz – 5.26 GHz (Boost)<br>**Silver:** 2.00 GHz – 4.40 GHz<br>**Standard:** 1.75 GHz – 3.60 GHz | Daily driver profile: EEVDF steers interactive desktop loads to Gold Cores on `performance` for instant boost; Silver cores ramp for multi-threaded loads; Standard cores stay within the 3.6 GHz Zen 4 efficiency sweet spot with silent idle fan (~600 RPM). |
+| **`performance`** | **All Cores:** `performance` (0x00, locked by governor) | **Gold:** 2.80 GHz – 5.26 GHz (Boost)<br>**Silver:** 2.40 GHz – 4.80 GHz<br>**Standard:** 2.20 GHz – 4.30 GHz | Turbo 65W TDP profile: Maximum gaming and single-threaded boost; capping 4 Standard cores at 4.30 GHz prevents voltage runaway during 8-core full load, locking temperatures safely around ~72–76°C without jet-engine fan noise. |
 
-#### Asymmetric Per-Core CPPC Architecture
+#### Asymmetric 3-Tier CPPC Architecture
 
-The driver dynamically queries ACPI CPPC Preferred Cores (`cppc_get_highest_perf`) across all online CPUs to identify silicon quality (Gold Cores, Silver Cores, Secondary Cores):
-* **Gold Cores:** Highest silicon binning capable of highest frequencies at lowest voltages. Assigned aggressive EPP (`performance`) and responsive floors for instant desktop responsiveness.
-* **Other Cores:** Assigned `balance_performance` on balanced mode to eliminate sluggishness while maintaining whisper-quiet fan acoustics.
+The driver dynamically queries ACPI CPPC Preferred Cores (`cppc_get_highest_perf`) across all online CPUs to categorize silicon quality into three tiers:
+* **🥇 Gold Cores:** Highest silicon binning capable of highest frequencies at lowest voltages. Assigned aggressive EPP (`performance`) and responsive floors for instant desktop responsiveness.
+* **🥈 Silver Cores:** Secondary top binning cores. Scaled smoothly for mid-to-high multi-threaded loads without unnecessary power draw.
+* **🥉 Standard Cores:** Efficient baseline cores. Kept within the optimal voltage-frequency curve to prevent thermal saturation and fan jitter.
 * **Autonomous Boost Enforcement:** Driver guarantees `cpufreq_boost_set_sw()` remains enabled on `balanced` and `performance`.
 
 #### GNOME, KDE & TLP Integration
@@ -288,9 +289,9 @@ If the driver is loaded on hardware without active AMD P-State (e.g. an Intel ma
 You can customize frequency brackets per profile on the fly via sysfs:
 
 ```bash
-# Customize Low-Power frequency brackets (e.g. 1.75 GHz - 2.8 GHz)
+# Customize Low-Power frequency brackets (e.g. 1.75 GHz - 3.2 GHz)
 echo 1754353 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_min
-echo 2800000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_max
+echo 3200000 | sudo tee /sys/devices/platform/minisforum_platform/freq_low_power_max
 
 # Customize Balanced baseline floor
 echo 1754353 | sudo tee /sys/devices/platform/minisforum_platform/freq_balanced_min
@@ -307,7 +308,7 @@ echo 0 | sudo tee /sys/devices/platform/minisforum_platform/manage_cpufreq
 You can configure persistent defaults in `/etc/modprobe.d/minisforum_platform.conf`:
 
 ```ini
-options minisforum_platform freq_low_power_min=1754353 freq_low_power_max=2800000 freq_balanced_min=1754353 freq_performance_min=2631530
+options minisforum_platform freq_low_power_min=1754353 freq_low_power_max=3200000 freq_balanced_min=1754353 freq_performance_min=2631530
 ```
 
 ---
