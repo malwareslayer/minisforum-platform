@@ -16,23 +16,23 @@ static bool manage_cpufreq = true;
 module_param(manage_cpufreq, bool, 0644);
 MODULE_PARM_DESC(manage_cpufreq, "Synchronize in-kernel frequency QoS and CPPC EPP with platform profiles (default: true)");
 
-static unsigned int freq_low_power_min = 1754353;
+static unsigned int freq_low_power_min;
 module_param(freq_low_power_min, uint, 0644);
-MODULE_PARM_DESC(freq_low_power_min, "Min CPU frequency in kHz for low-power profile");
+MODULE_PARM_DESC(freq_low_power_min, "Min CPU frequency in kHz for low-power profile (0: hardware baseline)");
 
 static unsigned int freq_low_power_max = 3200000;
 module_param(freq_low_power_max, uint, 0644);
 MODULE_PARM_DESC(freq_low_power_max, "Max CPU frequency in kHz for low-power profile");
 
-static unsigned int freq_balanced_min = 1754353;
+static unsigned int freq_balanced_min;
 module_param(freq_balanced_min, uint, 0644);
-MODULE_PARM_DESC(freq_balanced_min, "Min CPU frequency in kHz for balanced profile");
+MODULE_PARM_DESC(freq_balanced_min, "Min CPU frequency in kHz for balanced profile (0: hardware baseline)");
 
 static unsigned int freq_balanced_max;
 module_param(freq_balanced_max, uint, 0644);
 MODULE_PARM_DESC(freq_balanced_max, "Max CPU frequency in kHz for balanced profile (0: unconstrained)");
 
-static unsigned int freq_performance_min = 2631530;
+static unsigned int freq_performance_min = 2200000;
 module_param(freq_performance_min, uint, 0644);
 MODULE_PARM_DESC(freq_performance_min, "Min CPU frequency in kHz for performance profile");
 
@@ -94,15 +94,18 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 		switch (profile) {
 		case PLATFORM_PROFILE_LOW_POWER:
 			if (is_gold) {
-				target_min = freq_low_power_min;
+				target_min = freq_low_power_min ?
+					freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = 3200000;
 				target_epp = 0x80; /* balance_performance */
 			} else if (is_silver) {
-				target_min = 1400000;
+				target_min = freq_low_power_min ?
+					freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = 2600000;
 				target_epp = 0xC0; /* balance_power */
 			} else {
-				target_min = 1200000;
+				target_min = freq_low_power_min ?
+					freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = 2000000;
 				target_epp = 0xFF; /* power */
 			}
@@ -112,34 +115,40 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 
 		case PLATFORM_PROFILE_BALANCED:
 			if (is_gold) {
-				target_min = max(freq_balanced_min, 2400000U);
+				target_min = max(freq_balanced_min, 2200000U);
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x00; /* performance */
+				target_epp = 0x00; /* performance: lag-free interactive UI */
 			} else if (is_silver) {
-				target_min = max(freq_balanced_min, 2000000U);
-				target_max = 4400000;
-				target_epp = 0x80; /* balance_performance */
+				target_min = freq_balanced_min ?
+					freq_balanced_min : FREQ_QOS_MIN_DEFAULT_VALUE;
+				target_max = freq_balanced_max ?
+					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+				target_epp = 0x80; /* balance_performance: dynamic 5GHz boost */
 			} else {
-				target_min = freq_balanced_min;
-				target_max = 3600000;
-				target_epp = 0x80; /* default (balance_performance) */
+				target_min = freq_balanced_min ?
+					freq_balanced_min : FREQ_QOS_MIN_DEFAULT_VALUE;
+				target_max = freq_balanced_max ?
+					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+				target_epp = 0x80; /* balance_performance: dynamic 5GHz boost */
 			}
 			break;
 
 		case PLATFORM_PROFILE_PERFORMANCE:
 			if (is_gold) {
-				target_min = max(freq_performance_min, 2800000U);
+				target_min = max(freq_performance_min, 2600000U);
 				target_max = freq_performance_max ?
 					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance */
 			} else if (is_silver) {
-				target_min = max(freq_performance_min, 2400000U);
-				target_max = 4800000;
+				target_min = max(freq_performance_min, 2200000U);
+				target_max = freq_performance_max ?
+					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance */
 			} else {
-				target_min = 2200000;
-				target_max = 4300000;
+				target_min = max(freq_performance_min, 2000000U);
+				target_max = freq_performance_max ?
+					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance */
 			}
 			break;
