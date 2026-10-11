@@ -217,8 +217,8 @@ static void mf_fan_worker(struct work_struct *work)
 
 	/*
 	 * Asymmetric Exponential Moving Average (EMA) low-pass filter:
-	 * - Rapid response on thermal surge (alpha = 0.50) to catch compute/compilation load.
-	 * - Deep damping on cooling / transient Zen 4 spikes (alpha = 0.125) to eliminate fan hunting.
+	 * - Rapid response on thermal surge (alpha = 0.50) for compute load.
+	 * - Deep damping on cooling / transient Zen 4 spikes (alpha = 0.125).
 	 */
 	if (data->temp_ema == 0) {
 		data->temp_ema = comp_temp * 1000;
@@ -243,42 +243,45 @@ static void mf_fan_worker(struct work_struct *work)
 		if (eff_temp <= 42)
 			desired_code = 5;  /* ~450-500 RPM ultra-silent idle */
 		else if (eff_temp <= 54)
-			desired_code = 5 + (eff_temp - 42) * 4 / 12; /* 5 -> 9 (~500 -> ~900 RPM) */
+			desired_code = 5 + (eff_temp - 42) * 4 / 12;
 		else if (eff_temp <= 68)
-			desired_code = 9 + (eff_temp - 54) * 6 / 14; /* 9 -> 15 (~900 -> ~1500 RPM) */
+			desired_code = 9 + (eff_temp - 54) * 6 / 14;
 		else if (eff_temp <= 80)
-			desired_code = 15 + (eff_temp - 68) * 8 / 12; /* 15 -> 23 (~1500 -> ~2300 RPM) */
+			desired_code = 15 + (eff_temp - 68) * 8 / 12;
 		else
-			desired_code = clamp_val(23 + (eff_temp - 80) * 10 / 10, 23, 34);
+			desired_code = clamp_val(23 + (eff_temp - 80) * 10 / 10,
+						 23, 34);
 		break;
 
 	case PLATFORM_PROFILE_PERFORMANCE:
 		if (eff_temp <= 38)
 			desired_code = 8;  /* ~800 RPM base */
 		else if (eff_temp <= 50)
-			desired_code = 8 + (eff_temp - 38) * 6 / 12;  /* 8 -> 14 (~800 -> ~1450 RPM) */
+			desired_code = 8 + (eff_temp - 38) * 6 / 12;
 		else if (eff_temp <= 66)
-			desired_code = 14 + (eff_temp - 50) * 10 / 16; /* 14 -> 24 (~1450 -> ~2400 RPM) */
+			desired_code = 14 + (eff_temp - 50) * 10 / 16;
 		else if (eff_temp <= 80)
-			desired_code = 24 + (eff_temp - 66) * 12 / 14; /* 24 -> 36 (~2400 -> ~3600 RPM) */
+			desired_code = 24 + (eff_temp - 66) * 12 / 14;
 		else
-			desired_code = clamp_val(36 + (eff_temp - 80) * 12 / 10, 36, MF_MAX_FAN_CODE);
+			desired_code = clamp_val(36 + (eff_temp - 80) * 12 / 10,
+						 36, MF_MAX_FAN_CODE);
 		break;
 
 	case PLATFORM_PROFILE_BALANCED:
 	default:
 		if (eff_temp <= 40)
-			desired_code = 5;  /* ~450-500 RPM ultra-quiet idle floor */
+			desired_code = 5;  /* ~450-500 RPM ultra-quiet idle */
 		else if (eff_temp <= 50)
-			desired_code = 5 + (eff_temp - 40) * 5 / 10;  /* 5 -> 10 (~500 -> ~1050 RPM gradual ramp) */
+			desired_code = 5 + (eff_temp - 40) * 5 / 10;
 		else if (eff_temp <= 64)
-			desired_code = 10 + (eff_temp - 50) * 7 / 14; /* 10 -> 17 (~1050 -> ~1700 RPM) */
+			desired_code = 10 + (eff_temp - 50) * 7 / 14;
 		else if (eff_temp <= 78)
-			desired_code = 17 + (eff_temp - 64) * 11 / 14; /* 17 -> 28 (~1700 -> ~2800 RPM) */
+			desired_code = 17 + (eff_temp - 64) * 11 / 14;
 		else if (eff_temp <= 88)
-			desired_code = 28 + (eff_temp - 78) * 12 / 10; /* 28 -> 40 (~2800 -> ~4000 RPM) */
+			desired_code = 28 + (eff_temp - 78) * 12 / 10;
 		else
-			desired_code = clamp_val(40 + (eff_temp - 88) * 8 / 6, 40, MF_MAX_FAN_CODE);
+			desired_code = clamp_val(40 + (eff_temp - 88) * 8 / 6,
+						 40, MF_MAX_FAN_CODE);
 		break;
 	}
 
