@@ -130,10 +130,10 @@ Configure options at runtime or in `/etc/modprobe.d/minisforum_platform.conf`:
 | :--- | :--- | :--- | :--- |
 | `manage_cpufreq` | bool | `true` | Enable in-kernel Frequency QoS and CPPC coordination. |
 | `force_load` | bool | `false` | Bypass DMI quirk checks for experimental/untested boards. |
-| `freq_low_power_min` | uint | `1754353` | Floor frequency (kHz) for low-power profile. |
-| `freq_low_power_max` | uint | `3200000` | Ceiling frequency (kHz) for low-power profile. |
-| `freq_balanced_min` | uint | `1754353` | Baseline floor frequency (kHz) for balanced profile. |
-| `freq_performance_min` | uint | `2631530` | Baseline floor frequency (kHz) for performance profile. |
+| `freq_low_power_min` | uint | `0` | Floor frequency in kHz (0: hardware baseline ~400 MHz). |
+| `freq_low_power_max` | uint | `3200000` | Ceiling frequency in kHz for low-power profile. |
+| `freq_balanced_min` | uint | `0` | Floor frequency in kHz (0: hardware baseline, elastic 5.0+ GHz boost). |
+| `freq_performance_min` | uint | `2200000` | Floor frequency in kHz for performance profile. |
 
 ---
 
