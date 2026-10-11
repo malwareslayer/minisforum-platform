@@ -80,6 +80,8 @@ struct minisforum_data {
 	struct freq_qos_request *qos_min_req;
 	struct freq_qos_request *qos_max_req;
 	bool qos_initialized;
+	struct pm_qos_request latency_req;
+	bool latency_qos_initialized;
 	bool has_amd_pstate;
 };
 
