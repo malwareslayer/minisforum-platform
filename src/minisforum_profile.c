@@ -124,13 +124,13 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 					freq_balanced_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x80; /* balance_performance: dynamic 5GHz boost */
+				target_epp = 0x40; /* 64 (snappy burst: real-time audio & network softirqs) */
 			} else {
 				target_min = freq_balanced_min ?
 					freq_balanced_min : FREQ_QOS_MIN_DEFAULT_VALUE;
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x80; /* balance_performance: dynamic 5GHz boost */
+				target_epp = 0x60; /* 96 (responsive balanced: fast ramp without hesitation) */
 			}
 			break;
 
@@ -173,8 +173,28 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 		}
 	}
 
+	/* Synchronize system-wide CPU idle exit latency QoS constraint */
+	if (data->latency_qos_initialized) {
+		s32 latency_limit;
+
+		switch (profile) {
+		case PLATFORM_PROFILE_PERFORMANCE:
+			latency_limit = 10; /* Max 10 µs: C1/POLL only, ultra-low latency */
+			break;
+		case PLATFORM_PROFILE_BALANCED:
+			latency_limit = 100; /* Max 100 µs: allows C1 (1µs) and C2 (18µs), skips C3 (350µs) */
+			break;
+		case PLATFORM_PROFILE_LOW_POWER:
+		default:
+			latency_limit = PM_QOS_DEFAULT_VALUE; /* Allow C3 deep sleep for maximum power savings */
+			break;
+		}
+
+		cpu_latency_qos_update_request(&data->latency_req, latency_limit);
+	}
+
 	dev_info(&data->pdev->dev,
-		 "Applied in-kernel QoS: profile=%d (asymmetric 3-tier EPP & freq active)\n",
+		 "Applied in-kernel QoS: profile=%d (asymmetric 3-tier EPP & latency active)\n",
 		 profile);
 }
 
@@ -502,6 +522,10 @@ int minisforum_profile_init(struct minisforum_data *data)
 		data->qos_initialized = true;
 	}
 
+	/* Initialize in-kernel CPU idle exit latency PM QoS request */
+	cpu_latency_qos_add_request(&data->latency_req, PM_QOS_DEFAULT_VALUE);
+	data->latency_qos_initialized = true;
+
 	/* Read the initial profile from the EC */
 	ret = minisforum_ec_read(MF_EC_REG_CPU_PROFILE, &initial_ec_profile);
 	if (ret == 0) {
@@ -548,7 +572,13 @@ void minisforum_profile_exit(struct minisforum_data *data)
 
 	sysfs_remove_group(&data->pdev->dev.kobj, &mf_platform_attr_group);
 
-	/* Safely release all in-kernel QoS requests */
+	/* Safely release CPU latency QoS request */
+	if (data->latency_qos_initialized) {
+		cpu_latency_qos_remove_request(&data->latency_req);
+		data->latency_qos_initialized = false;
+	}
+
+	/* Safely release all in-kernel frequency QoS requests */
 	if (data->qos_initialized) {
 		for_each_possible_cpu(cpu) {
 			if (freq_qos_request_active(&data->qos_min_req[cpu]))
