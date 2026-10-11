@@ -20,7 +20,7 @@ static unsigned int freq_low_power_min = 1754353;
 module_param(freq_low_power_min, uint, 0644);
 MODULE_PARM_DESC(freq_low_power_min, "Min CPU frequency in kHz for low-power profile");
 
-static unsigned int freq_low_power_max = 2800000;
+static unsigned int freq_low_power_max = 3200000;
 module_param(freq_low_power_max, uint, 0644);
 MODULE_PARM_DESC(freq_low_power_max, "Max CPU frequency in kHz for low-power profile");
 
@@ -93,35 +93,54 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 
 		switch (profile) {
 		case PLATFORM_PROFILE_LOW_POWER:
-			target_min = freq_low_power_min;
-			target_max = freq_low_power_max;
-			if (is_gold)
-				target_epp = 0x80;
-			else
-				target_epp = 0xC0;
+			if (is_gold) {
+				target_min = freq_low_power_min;
+				target_max = 3200000;
+				target_epp = 0x80; /* balance_performance */
+			} else if (is_silver) {
+				target_min = 1400000;
+				target_max = 2600000;
+				target_epp = 0xC0; /* balance_power */
+			} else {
+				target_min = 1200000;
+				target_max = 2000000;
+				target_epp = 0xFF; /* power */
+			}
+			if (freq_low_power_max)
+				target_max = min(target_max, freq_low_power_max);
 			break;
 
 		case PLATFORM_PROFILE_BALANCED:
-			target_max = freq_balanced_max ?
-				freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 			if (is_gold) {
-				target_min = max(freq_balanced_min, 2200000U);
-				target_epp = 0x00;
+				target_min = max(freq_balanced_min, 2400000U);
+				target_max = freq_balanced_max ?
+					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+				target_epp = 0x00; /* performance */
+			} else if (is_silver) {
+				target_min = max(freq_balanced_min, 2000000U);
+				target_max = 4400000;
+				target_epp = 0x80; /* balance_performance */
 			} else {
 				target_min = freq_balanced_min;
-				target_epp = 0x80;
+				target_max = 3600000;
+				target_epp = 0x80; /* default (balance_performance) */
 			}
 			break;
 
 		case PLATFORM_PROFILE_PERFORMANCE:
-			target_max = freq_performance_max ?
-				freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-			if (is_gold || is_silver || cpu < nr_cpu_ids / 2) {
-				target_min = freq_performance_min;
-				target_epp = 0x00;
+			if (is_gold) {
+				target_min = max(freq_performance_min, 2800000U);
+				target_max = freq_performance_max ?
+					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+				target_epp = 0x00; /* performance */
+			} else if (is_silver) {
+				target_min = max(freq_performance_min, 2400000U);
+				target_max = 4800000;
+				target_epp = 0x00; /* performance */
 			} else {
-				target_min = max(freq_balanced_min, 2200000U);
-				target_epp = 0x80;
+				target_min = 2200000;
+				target_max = 4300000;
+				target_epp = 0x00; /* performance */
 			}
 			break;
 
@@ -146,7 +165,7 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 	}
 
 	dev_info(&data->pdev->dev,
-		 "Applied in-kernel QoS: profile=%d (asymmetric EPP active)\n",
+		 "Applied in-kernel QoS: profile=%d (asymmetric 3-tier EPP & freq active)\n",
 		 profile);
 }
 
