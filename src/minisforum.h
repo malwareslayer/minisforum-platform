@@ -22,7 +22,7 @@
 #include <acpi/cppc_acpi.h>
 
 #define DRV_NAME	"minisforum_platform"
-#define DRV_VERSION	"0.2.0"
+#define DRV_VERSION	"0.3.0"
 
 /* EC Register Map (ACPI EC 0x62/0x66 address space) */
 #define MF_EC_REG_VER_MAJ		0x02
