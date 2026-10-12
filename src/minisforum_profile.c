@@ -32,7 +32,7 @@ static unsigned int freq_balanced_max;
 module_param(freq_balanced_max, uint, 0644);
 MODULE_PARM_DESC(freq_balanced_max, "Max CPU frequency in kHz for balanced profile (0: unconstrained)");
 
-static unsigned int freq_performance_min = 2400000;
+static unsigned int freq_performance_min = 2800000;
 module_param(freq_performance_min, uint, 0644);
 MODULE_PARM_DESC(freq_performance_min, "Min CPU frequency in kHz for performance profile");
 
@@ -115,36 +115,36 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 
 		case PLATFORM_PROFILE_BALANCED:
 			if (is_gold) {
-				target_min = max(freq_balanced_min, 2800000U);
+				target_min = max(freq_balanced_min, 3000000U);
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance: lag-free interactive UI */
 			} else if (is_silver) {
-				target_min = max(freq_balanced_min, 2400000U);
+				target_min = max(freq_balanced_min, 2600000U);
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x20; /* 32: aggressive priority to 4.0 GHz */
 			} else {
-				target_min = max(freq_balanced_min, 1800000U);
+				target_min = max(freq_balanced_min, 2400000U);
 				target_max = freq_balanced_max ?
 					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x40; /* 64: responsive 3.5 - 4.0 GHz sweet spot */
+				target_epp = 0x30; /* 48: responsive 28W - 54W sweet spot */
 			}
 			break;
 
 		case PLATFORM_PROFILE_PERFORMANCE:
 			if (is_gold) {
-				target_min = max(freq_performance_min, 3000000U);
+				target_min = max(freq_performance_min, 3400000U);
 				target_max = freq_performance_max ?
 					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance */
 			} else if (is_silver) {
-				target_min = max(freq_performance_min, 2600000U);
+				target_min = max(freq_performance_min, 3000000U);
 				target_max = freq_performance_max ?
 					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance */
 			} else {
-				target_min = max(freq_performance_min, 2400000U);
+				target_min = max(freq_performance_min, 2800000U);
 				target_max = freq_performance_max ?
 					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 				target_epp = 0x00; /* performance */
@@ -426,9 +426,10 @@ static int mf_profile_get(struct device *dev, enum platform_profile_option *prof
 	return 0;
 }
 
-static int mf_profile_set(struct device *dev, enum platform_profile_option profile)
+int minisforum_profile_set(struct minisforum_data *data,
+			   enum platform_profile_option profile)
 {
-	struct minisforum_data *data = dev_get_drvdata(dev);
+	struct device *dev = &data->pdev->dev;
 	u8 ec_code;
 	int ret = 0;
 
@@ -438,15 +439,15 @@ static int mf_profile_set(struct device *dev, enum platform_profile_option profi
 	switch (profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
 		ec_code = MF_EC_PROFILE_QUIET;
-		dev_info(dev, "Switching to Low Power (Quiet / Eco 35W)\n");
+		dev_info(dev, "Switching to Low Power (Quiet / Eco 15-28W)\n");
 		break;
 	case PLATFORM_PROFILE_BALANCED:
 		ec_code = MF_EC_PROFILE_BALANCED;
-		dev_info(dev, "Switching to Balanced (Standard 54W)\n");
+		dev_info(dev, "Switching to Balanced (Punchy 28-54W)\n");
 		break;
 	case PLATFORM_PROFILE_PERFORMANCE:
 		ec_code = MF_EC_PROFILE_PERFORMANCE;
-		dev_info(dev, "Switching to Performance (Turbo 65W)\n");
+		dev_info(dev, "Switching to Performance (Unconstrained 54-65W+)\n");
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -469,6 +470,13 @@ static int mf_profile_set(struct device *dev, enum platform_profile_option profi
 	minisforum_profile_sync_cpufreq(data, profile);
 
 	return 0;
+}
+
+static int mf_profile_set(struct device *dev, enum platform_profile_option profile)
+{
+	struct minisforum_data *data = dev_get_drvdata(dev);
+
+	return minisforum_profile_set(data, profile);
 }
 
 static const struct platform_profile_ops mf_profile_ops = {

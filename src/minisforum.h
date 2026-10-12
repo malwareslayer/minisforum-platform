@@ -19,10 +19,11 @@
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
 #include <linux/pm_qos.h>
+#include <linux/suspend.h>
 #include <acpi/cppc_acpi.h>
 
 #define DRV_NAME	"minisforum_platform"
-#define DRV_VERSION	"0.3.0"
+#define DRV_VERSION	"0.3.1"
 
 /* EC Register Map (ACPI EC 0x62/0x66 address space) */
 #define MF_EC_REG_VER_MAJ		0x02
@@ -83,11 +84,14 @@ struct minisforum_data {
 	struct pm_qos_request latency_req;
 	bool latency_qos_initialized;
 	bool has_amd_pstate;
+	struct notifier_block pm_nb;
 };
 
 /* Subsystem Interface Prototypes */
 int minisforum_profile_init(struct minisforum_data *data);
 void minisforum_profile_exit(struct minisforum_data *data);
+int minisforum_profile_set(struct minisforum_data *data,
+			   enum platform_profile_option profile);
 void minisforum_profile_sync_cpufreq(struct minisforum_data *data,
 				     enum platform_profile_option profile);
 

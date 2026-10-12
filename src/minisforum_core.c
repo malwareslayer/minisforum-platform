@@ -109,6 +109,31 @@ static bool force_load;
 module_param(force_load, bool, 0444);
 MODULE_PARM_DESC(force_load, "Force driver initialization on unlisted or unsupported hardware (experimental)");
 
+static int minisforum_pm_notify(struct notifier_block *nb,
+				unsigned long action, void *data)
+{
+	struct minisforum_data *mf = container_of(nb, struct minisforum_data, pm_nb);
+
+	switch (action) {
+	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
+	case PM_POST_RESTORE:
+		dev_info(&mf->pdev->dev,
+			 "System resumed from sleep: restoring hardware profile and QoS\n");
+		/* Reset EMA filter to prevent pre-suspend temperature carryover */
+		mf->temp_ema = 0;
+		mf->cooldown_timer = 0;
+
+		/* Re-apply profile, EC fan table, frequency QoS, and CPPC EPP */
+		minisforum_profile_set(mf, mf->current_profile);
+		break;
+	default:
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
 static int __init minisforum_init(void)
 {
 	const struct dmi_system_id *dmi_match;
@@ -168,6 +193,12 @@ static int __init minisforum_init(void)
 	if (ret)
 		pr_warn(DRV_NAME ": Failed to initialize hwmon (err %d)\n", ret);
 
+	/* 6. Register PM Suspend/Resume Notifier */
+	mf_data->pm_nb.notifier_call = minisforum_pm_notify;
+	ret = register_pm_notifier(&mf_data->pm_nb);
+	if (ret)
+		pr_warn(DRV_NAME ": Failed to register PM notifier (err %d)\n", ret);
+
 	pr_info(DRV_NAME ": Minisforum Platform Driver loaded successfully\n");
 	return 0;
 }
@@ -177,6 +208,7 @@ static void __exit minisforum_exit(void)
 	if (!mf_data)
 		return;
 
+	unregister_pm_notifier(&mf_data->pm_nb);
 	minisforum_hwmon_exit(mf_data);
 	minisforum_profile_exit(mf_data);
 
