@@ -168,36 +168,36 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 
 			case PLATFORM_PROFILE_BALANCED:
 				if (is_gold) {
-					target_min = max(freq_balanced_min, 4000000U);
+					target_min = max(freq_balanced_min, 4600000U);
 					target_max = freq_balanced_max ?
 						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 					target_epp = 0x00; /* performance: lag-free interactive UI */
 				} else if (is_silver) {
-					target_min = max(freq_balanced_min, 3500000U);
+					target_min = max(freq_balanced_min, 4300000U);
 					target_max = freq_balanced_max ?
 						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 					target_epp = 0x10; /* 16: aggressive ramp to peak boost */
 				} else {
-					target_min = max(freq_balanced_min, 3000000U);
+					target_min = max(freq_balanced_min, 4000000U);
 					target_max = freq_balanced_max ?
 						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-					target_epp = 0x20; /* 32: snappy background worker floor */
+					target_epp = 0x20; /* 32: snappy base clock baseline (TSC ~3.99 GHz) */
 				}
 				break;
 
 			case PLATFORM_PROFILE_PERFORMANCE:
 				if (is_gold) {
-					target_min = max(freq_performance_min, 4200000U);
+					target_min = max(freq_performance_min, 4800000U);
 					target_max = freq_performance_max ?
 						freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 					target_epp = 0x00; /* performance */
 				} else if (is_silver) {
-					target_min = max(freq_performance_min, 3800000U);
+					target_min = max(freq_performance_min, 4500000U);
 					target_max = freq_performance_max ?
 						freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 					target_epp = 0x00; /* performance */
 				} else {
-					target_min = max(freq_performance_min, 3400000U);
+					target_min = max(freq_performance_min, 4200000U);
 					target_max = freq_performance_max ?
 						freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
 					target_epp = 0x00; /* performance */
