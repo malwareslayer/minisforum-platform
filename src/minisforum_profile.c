@@ -9,12 +9,22 @@
 #include <linux/cpufreq.h>
 #include <linux/string.h>
 #include <linux/slab.h>
+#include <linux/pci.h>
+#include <linux/pci_ids.h>
 #include "minisforum.h"
 
 /* Configurable module parameters */
 static bool manage_cpufreq = true;
 module_param(manage_cpufreq, bool, 0644);
 MODULE_PARM_DESC(manage_cpufreq, "Synchronize in-kernel frequency QoS and CPPC EPP with platform profiles (default: true)");
+
+static bool manage_nvme_pm = true;
+module_param(manage_nvme_pm, bool, 0644);
+MODULE_PARM_DESC(manage_nvme_pm, "Synchronize NVMe APST latency tolerance QoS with platform profiles (default: true)");
+
+static unsigned int nvme_latency_balanced = 15000;
+module_param(nvme_latency_balanced, uint, 0644);
+MODULE_PARM_DESC(nvme_latency_balanced, "NVMe latency tolerance in microseconds for balanced profile (default: 15000)");
 
 static unsigned int freq_low_power_min;
 module_param(freq_low_power_min, uint, 0644);
@@ -39,6 +49,51 @@ MODULE_PARM_DESC(freq_performance_min, "Min CPU frequency in kHz for performance
 static unsigned int freq_performance_max;
 module_param(freq_performance_max, uint, 0644);
 MODULE_PARM_DESC(freq_performance_max, "Max CPU frequency in kHz for performance profile (0: unconstrained)");
+
+static int mf_nvme_set_child_latency(struct device *dev, void *data)
+{
+	s32 target_tol = *(s32 *)data;
+
+	if (strncmp(dev_name(dev), "nvme", 4) == 0)
+		dev_pm_qos_update_user_latency_tolerance(dev, target_tol);
+
+	return 0;
+}
+
+static void mf_restore_nvme_latency_qos(void)
+{
+	struct pci_dev *pdev = NULL;
+	s32 target_tol = PM_QOS_LATENCY_TOLERANCE_NO_CONSTRAINT;
+
+	while ((pdev = pci_get_class(PCI_CLASS_STORAGE_EXPRESS, pdev)) != NULL)
+		device_for_each_child(&pdev->dev, &target_tol, mf_nvme_set_child_latency);
+}
+
+static void mf_sync_nvme_latency_qos(struct minisforum_data *data,
+				     enum platform_profile_option profile)
+{
+	struct pci_dev *pdev = NULL;
+	s32 target_tol;
+
+	if (!manage_nvme_pm)
+		return;
+
+	switch (profile) {
+	case PLATFORM_PROFILE_BALANCED:
+		target_tol = (s32)nvme_latency_balanced;
+		break;
+	case PLATFORM_PROFILE_PERFORMANCE:
+		target_tol = 0;
+		break;
+	case PLATFORM_PROFILE_LOW_POWER:
+	default:
+		target_tol = PM_QOS_LATENCY_TOLERANCE_NO_CONSTRAINT;
+		break;
+	}
+
+	while ((pdev = pci_get_class(PCI_CLASS_STORAGE_EXPRESS, pdev)) != NULL)
+		device_for_each_child(&pdev->dev, &target_tol, mf_nvme_set_child_latency);
+}
 
 static bool mf_detect_amd_pstate(void)
 {
@@ -73,101 +128,100 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 	u64 max_perf;
 	int cpu;
 
-	if (!data->qos_initialized || !manage_cpufreq || !data->has_amd_pstate)
-		return;
+	if (data->qos_initialized && manage_cpufreq && data->has_amd_pstate) {
+		max_perf = mf_get_max_highest_perf();
 
-	max_perf = mf_get_max_highest_perf();
+		for_each_online_cpu(cpu) {
+			struct cpufreq_policy *policy;
+			unsigned int target_min, target_max;
+			u64 target_epp, cpu_perf = 0;
+			bool is_gold = false, is_silver = false;
 
-	for_each_online_cpu(cpu) {
-		struct cpufreq_policy *policy;
-		unsigned int target_min, target_max;
-		u64 target_epp, cpu_perf = 0;
-		bool is_gold = false, is_silver = false;
-
-		if (max_perf > 0 && cppc_get_highest_perf(cpu, &cpu_perf) == 0) {
-			if (cpu_perf == max_perf)
-				is_gold = true;
-			else if (cpu_perf + 16 >= max_perf)
-				is_silver = true;
-		}
-
-		switch (profile) {
-		case PLATFORM_PROFILE_LOW_POWER:
-			if (is_gold) {
-				target_min = freq_low_power_min ?
-					freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
-				target_max = 3200000;
-				target_epp = 0x80; /* balance_performance */
-			} else if (is_silver) {
-				target_min = freq_low_power_min ?
-					freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
-				target_max = 2600000;
-				target_epp = 0xC0; /* balance_power */
-			} else {
-				target_min = freq_low_power_min ?
-					freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
-				target_max = 2000000;
-				target_epp = 0xFF; /* power */
+			if (max_perf > 0 && cppc_get_highest_perf(cpu, &cpu_perf) == 0) {
+				if (cpu_perf == max_perf)
+					is_gold = true;
+				else if (cpu_perf + 16 >= max_perf)
+					is_silver = true;
 			}
-			if (freq_low_power_max)
-				target_max = min(target_max, freq_low_power_max);
-			break;
 
-		case PLATFORM_PROFILE_BALANCED:
-			if (is_gold) {
-				target_min = max(freq_balanced_min, 3000000U);
-				target_max = freq_balanced_max ?
-					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x00; /* performance: lag-free interactive UI */
-			} else if (is_silver) {
-				target_min = max(freq_balanced_min, 2600000U);
-				target_max = freq_balanced_max ?
-					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x20; /* 32: aggressive priority to 4.0 GHz */
-			} else {
-				target_min = max(freq_balanced_min, 2400000U);
-				target_max = freq_balanced_max ?
-					freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x30; /* 48: responsive 28W - 54W sweet spot */
+			switch (profile) {
+			case PLATFORM_PROFILE_LOW_POWER:
+				if (is_gold) {
+					target_min = freq_low_power_min ?
+						freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
+					target_max = 3200000;
+					target_epp = 0x80; /* balance_performance */
+				} else if (is_silver) {
+					target_min = freq_low_power_min ?
+						freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
+					target_max = 2600000;
+					target_epp = 0xC0; /* balance_power */
+				} else {
+					target_min = freq_low_power_min ?
+						freq_low_power_min : FREQ_QOS_MIN_DEFAULT_VALUE;
+					target_max = 2000000;
+					target_epp = 0xFF; /* power */
+				}
+				if (freq_low_power_max)
+					target_max = min(target_max, freq_low_power_max);
+				break;
+
+			case PLATFORM_PROFILE_BALANCED:
+				if (is_gold) {
+					target_min = max(freq_balanced_min, 4000000U);
+					target_max = freq_balanced_max ?
+						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+					target_epp = 0x00; /* performance: lag-free interactive UI */
+				} else if (is_silver) {
+					target_min = max(freq_balanced_min, 3500000U);
+					target_max = freq_balanced_max ?
+						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+					target_epp = 0x10; /* 16: aggressive ramp to peak boost */
+				} else {
+					target_min = max(freq_balanced_min, 3000000U);
+					target_max = freq_balanced_max ?
+						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+					target_epp = 0x20; /* 32: snappy background worker floor */
+				}
+				break;
+
+			case PLATFORM_PROFILE_PERFORMANCE:
+				if (is_gold) {
+					target_min = max(freq_performance_min, 4200000U);
+					target_max = freq_performance_max ?
+						freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+					target_epp = 0x00; /* performance */
+				} else if (is_silver) {
+					target_min = max(freq_performance_min, 3800000U);
+					target_max = freq_performance_max ?
+						freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+					target_epp = 0x00; /* performance */
+				} else {
+					target_min = max(freq_performance_min, 3400000U);
+					target_max = freq_performance_max ?
+						freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
+					target_epp = 0x00; /* performance */
+				}
+				break;
+
+			default:
+				return;
 			}
-			break;
 
-		case PLATFORM_PROFILE_PERFORMANCE:
-			if (is_gold) {
-				target_min = max(freq_performance_min, 3400000U);
-				target_max = freq_performance_max ?
-					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x00; /* performance */
-			} else if (is_silver) {
-				target_min = max(freq_performance_min, 3000000U);
-				target_max = freq_performance_max ?
-					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x00; /* performance */
-			} else {
-				target_min = max(freq_performance_min, 2800000U);
-				target_max = freq_performance_max ?
-					freq_performance_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-				target_epp = 0x00; /* performance */
+			if (freq_qos_request_active(&data->qos_min_req[cpu]))
+				freq_qos_update_request(&data->qos_min_req[cpu], target_min);
+			if (freq_qos_request_active(&data->qos_max_req[cpu]))
+				freq_qos_update_request(&data->qos_max_req[cpu], target_max);
+			cppc_set_epp(cpu, target_epp);
+
+			policy = cpufreq_cpu_get(cpu);
+			if (policy) {
+				if (!policy->boost_enabled && policy->boost_supported &&
+				    profile != PLATFORM_PROFILE_LOW_POWER)
+					cpufreq_boost_set_sw(policy, 1);
+
+				cpufreq_cpu_put(policy);
 			}
-			break;
-
-		default:
-			return;
-		}
-
-		if (freq_qos_request_active(&data->qos_min_req[cpu]))
-			freq_qos_update_request(&data->qos_min_req[cpu], target_min);
-		if (freq_qos_request_active(&data->qos_max_req[cpu]))
-			freq_qos_update_request(&data->qos_max_req[cpu], target_max);
-		cppc_set_epp(cpu, target_epp);
-
-		policy = cpufreq_cpu_get(cpu);
-		if (policy) {
-			if (!policy->boost_enabled && policy->boost_supported &&
-			    profile != PLATFORM_PROFILE_LOW_POWER)
-				cpufreq_boost_set_sw(policy, 1);
-
-			cpufreq_cpu_put(policy);
 		}
 	}
 
@@ -180,8 +234,8 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 			latency_limit = 10; /* Max 10 µs: C1/POLL only */
 			break;
 		case PLATFORM_PROFILE_BALANCED:
-			/* Max 100 µs: allows C1/C2 (18µs), skips C3 (350µs) */
-			latency_limit = 100;
+			/* Max 500 µs: allows C1 (1µs), C2 (18µs), and C3 (350µs) */
+			latency_limit = 500;
 			break;
 		case PLATFORM_PROFILE_LOW_POWER:
 		default:
@@ -193,8 +247,11 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 		cpu_latency_qos_update_request(&data->latency_req, latency_limit);
 	}
 
+	/* Synchronize NVMe autonomous power state transitions */
+	mf_sync_nvme_latency_qos(data, profile);
+
 	dev_info(&data->pdev->dev,
-		 "Applied in-kernel QoS: profile=%d (asymmetric 3-tier EPP & latency active)\n",
+		 "Applied in-kernel QoS: profile=%d (asymmetric 3-tier EPP, latency & NVMe APST active)\n",
 		 profile);
 }
 
@@ -230,6 +287,61 @@ static ssize_t manage_cpufreq_store(struct device *dev,
 	return count;
 }
 static DEVICE_ATTR_RW(manage_cpufreq);
+
+static ssize_t manage_nvme_pm_show(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", manage_nvme_pm ? 1 : 0);
+}
+
+static ssize_t manage_nvme_pm_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct minisforum_data *data = dev_get_drvdata(dev);
+	bool val;
+	int ret;
+
+	ret = kstrtobool(buf, &val);
+	if (ret)
+		return ret;
+
+	manage_nvme_pm = val;
+	if (manage_nvme_pm && data)
+		mf_sync_nvme_latency_qos(data, data->current_profile);
+	else
+		mf_restore_nvme_latency_qos();
+
+	return count;
+}
+static DEVICE_ATTR_RW(manage_nvme_pm);
+
+static ssize_t nvme_latency_balanced_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	return sysfs_emit(buf, "%u\n", nvme_latency_balanced);
+}
+
+static ssize_t nvme_latency_balanced_store(struct device *dev,
+					   struct device_attribute *attr,
+					   const char *buf, size_t count)
+{
+	struct minisforum_data *data = dev_get_drvdata(dev);
+	unsigned int val;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &val);
+	if (ret)
+		return ret;
+
+	nvme_latency_balanced = val;
+	if (manage_nvme_pm && data && data->current_profile == PLATFORM_PROFILE_BALANCED)
+		mf_sync_nvme_latency_qos(data, PLATFORM_PROFILE_BALANCED);
+
+	return count;
+}
+static DEVICE_ATTR_RW(nvme_latency_balanced);
 
 static ssize_t freq_low_power_min_show(struct device *dev,
 				       struct device_attribute *attr, char *buf)
@@ -391,6 +503,8 @@ static DEVICE_ATTR_RW(freq_performance_max);
 
 static struct attribute *mf_platform_attrs[] = {
 	&dev_attr_manage_cpufreq.attr,
+	&dev_attr_manage_nvme_pm.attr,
+	&dev_attr_nvme_latency_balanced.attr,
 	&dev_attr_freq_low_power_min.attr,
 	&dev_attr_freq_low_power_max.attr,
 	&dev_attr_freq_balanced_min.attr,
@@ -566,9 +680,8 @@ int minisforum_profile_init(struct minisforum_data *data)
 		dev_warn(&data->pdev->dev,
 			 "Failed to create sysfs platform attribute group (%d)\n", ret);
 
-	/* Synchronize CPU governor and QoS for initial detected profile */
-	if (data->has_amd_pstate)
-		minisforum_profile_sync_cpufreq(data, data->current_profile);
+	/* Synchronize CPU governor, QoS, and NVMe PM for initial detected profile */
+	minisforum_profile_sync_cpufreq(data, data->current_profile);
 
 	dev_info(&data->pdev->dev, "Platform profile registered successfully\n");
 	return 0;
@@ -579,6 +692,10 @@ void minisforum_profile_exit(struct minisforum_data *data)
 	int cpu;
 
 	sysfs_remove_group(&data->pdev->dev.kobj, &mf_platform_attr_group);
+
+	/* Restore unconstrained NVMe latency tolerance */
+	if (manage_nvme_pm)
+		mf_restore_nvme_latency_qos();
 
 	/* Safely release CPU latency QoS request */
 	if (data->latency_qos_initialized) {
