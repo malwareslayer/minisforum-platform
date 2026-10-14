@@ -21,10 +21,17 @@ jobs:
 
       - name: Run checkpatch.pl --strict
         run: |
-          wget -q https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl
-          wget -q https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt
-          chmod +x checkpatch.pl
-          ./checkpatch.pl --strict --no-tree -f src/*.[ch]
+          CHECKPATCH="$(find /usr/src/linux-headers-* -name checkpatch.pl 2>/dev/null | head -n 1)"
+          if [ -n "$CHECKPATCH" ] && [ -f "$CHECKPATCH" ]; then
+            echo "Using system checkpatch: $CHECKPATCH"
+          else
+            echo "Downloading upstream checkpatch..."
+            curl -fsSL --retry 3 https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl -o /tmp/checkpatch.pl
+            curl -fsSL --retry 3 https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt -o /tmp/spelling.txt 2>/dev/null || true
+            chmod +x /tmp/checkpatch.pl
+            CHECKPATCH="/tmp/checkpatch.pl"
+          fi
+          "$CHECKPATCH" --strict --no-tree -f src/*.[ch]
 
   build:
     name: Compile Kernel Module
