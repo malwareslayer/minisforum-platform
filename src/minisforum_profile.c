@@ -171,17 +171,20 @@ static void mf_apply_profile_qos(struct minisforum_data *data,
 					target_min = max(freq_balanced_min, 4600000U);
 					target_max = freq_balanced_max ?
 						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-					target_epp = 0x00; /* performance: lag-free interactive UI */
+					/* Performance EPP: instant UI response */
+					target_epp = 0x00;
 				} else if (is_silver) {
 					target_min = max(freq_balanced_min, 4300000U);
 					target_max = freq_balanced_max ?
 						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-					target_epp = 0x10; /* 16: aggressive ramp to peak boost */
+					/* Aggressive ramp to peak boost */
+					target_epp = 0x10;
 				} else {
 					target_min = max(freq_balanced_min, 4000000U);
 					target_max = freq_balanced_max ?
 						freq_balanced_max : FREQ_QOS_MAX_DEFAULT_VALUE;
-					target_epp = 0x20; /* 32: snappy base clock baseline (TSC ~3.99 GHz) */
+					/* Base clock floor: snappy baseline */
+					target_epp = 0x20;
 				}
 				break;
 

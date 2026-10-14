@@ -1,5 +1,5 @@
 Package: minisforum-platform-dkms
-Version: 0.3.0
+Version: 0.3.2
 Section: kernel
 Priority: optional
 Architecture: all
