@@ -14,7 +14,7 @@ optdepends=('tuned-ppd: recommended daemon for seamless GNOME/KDE desktop power 
 provides=("${_modname}")
 conflicts=("${_modname}")
 source=("${url}/releases/download/v${pkgver}/${_pkgname}-v${pkgver}.tar.gz")
-sha256sums=('0dff83abc154bbf1d29366643418c7202a14b09eec580042fb330c150a77a37c')
+sha256sums=('389ea180575f47a6cecb364ad75222909026e3d8cf878400694a558e52872453')
 
 prepare() {
   cd "${_pkgname}-v${pkgver}"
