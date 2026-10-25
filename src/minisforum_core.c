@@ -105,10 +105,6 @@ int minisforum_ec_write(u8 addr, u8 val)
 	return ec_write(addr, val);
 }
 
-static bool force_load;
-module_param(force_load, bool, 0444);
-MODULE_PARM_DESC(force_load, "Force driver initialization on unlisted or unsupported hardware (experimental)");
-
 static int minisforum_pm_notify(struct notifier_block *nb,
 				unsigned long action, void *data)
 {
@@ -148,9 +144,6 @@ static int __init minisforum_init(void)
 	if (dmi_match) {
 		board_config = dmi_match->driver_data;
 		pr_info(DRV_NAME ": Detected matched hardware: %s\n", board_config->description);
-	} else if (force_load) {
-		board_config = &board_generic;
-		pr_warn(DRV_NAME ": FORCED LOAD requested via module parameter! Experimental mode active on unlisted hardware.\n");
 	} else {
 		/* Fallback probe: Check if Minisforum EC is present */
 		if (minisforum_ec_read(MF_EC_REG_VER_MAJ, &ec_ver_maj) == 0 &&
@@ -160,7 +153,7 @@ static int __init minisforum_init(void)
 			pr_info(DRV_NAME ": Unlisted board detected with active EC v%u.%u, using generic profile\n",
 				ec_ver_maj, ec_ver_min);
 		} else {
-			pr_warn(DRV_NAME ": No compatible Minisforum hardware detected. Use force_load=1 to test experimentally.\n");
+			pr_warn(DRV_NAME ": No compatible Minisforum hardware detected.\n");
 			return -ENODEV;
 		}
 	}
