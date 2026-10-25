@@ -270,7 +270,8 @@ static void mf_fan_worker(struct work_struct *work)
 	case PLATFORM_PROFILE_BALANCED:
 	default:
 		if (eff_temp <= 43)
-			desired_code = 9;  /* ~920-940 RPM inaudible idle floor (~42-43°C standby) */
+			/* ~920-940 RPM inaudible idle floor (~42-43°C standby) */
+			desired_code = 9;
 		else if (eff_temp <= 52)
 			desired_code = 9 + (eff_temp - 43) * 3 / 9;
 		else if (eff_temp <= 64)
