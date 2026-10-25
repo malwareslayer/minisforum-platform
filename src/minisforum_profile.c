@@ -22,9 +22,9 @@ static bool manage_nvme_pm = true;
 module_param(manage_nvme_pm, bool, 0644);
 MODULE_PARM_DESC(manage_nvme_pm, "Synchronize NVMe APST latency tolerance QoS with platform profiles (default: true)");
 
-static unsigned int nvme_latency_balanced = 15000;
+static unsigned int nvme_latency_balanced = 25000;
 module_param(nvme_latency_balanced, uint, 0644);
-MODULE_PARM_DESC(nvme_latency_balanced, "NVMe latency tolerance in microseconds for balanced profile (default: 15000)");
+MODULE_PARM_DESC(nvme_latency_balanced, "NVMe latency tolerance in microseconds for balanced profile (default: 25000)");
 
 static unsigned int freq_low_power_min;
 module_param(freq_low_power_min, uint, 0644);
