@@ -12,7 +12,7 @@ A modular Linux kernel platform and hardware monitoring driver for Minisforum Mi
 
 * **⚡ Native ACPI Platform Profile:** Seamlessly integrates with `/sys/firmware/acpi/platform_profile` (`low-power`, `balanced`, `performance`).
 * **🎯 3-Tier Asymmetric CPPC QoS:** Automatically queries AMD CPPC Preferred Cores (`highest_perf`) and assigns hierarchical Frequency QoS limits and EPP hints across **Gold**, **Silver**, and **Standard** cores. Eliminates desktop micro-stutter while keeping multi-core workloads cool and silent.
-* **❄️ In-Kernel Dynamic Thermal Governor (Zero-Daemon):** Directly drives the Embedded Controller (EC) using an Exponential Moving Average (EMA) of composite system temperatures. Provides an inaudible ~550–600 RPM idle floor, smooth stepped rate-limiting (+100 RPM/sec), and cooldown hysteresis.
+* **❄️ In-Kernel Dynamic Thermal Governor (Zero-Daemon):** Directly drives the Embedded Controller (EC) using an Exponential Moving Average (EMA) of composite system temperatures. Provides an inaudible ~600–940 RPM idle floor, smooth stepped rate-limiting (+100 RPM/sec), and cooldown hysteresis.
 * **📊 Hardware Monitoring (`hwmon`):** Exposes CPU, Motherboard, and VRM temperature sensors, dual fan tachometers, and manual PWM overrides (`pwm1` / `pwm1_enable`).
 * **🛡️ Multi-Model DMI Quirks:** Automatic motherboard detection with fallback support via `force_load=1`.
 
@@ -79,7 +79,7 @@ echo "balanced" | sudo tee /sys/firmware/acpi/platform_profile
 
 | Profile | Tier | Cores (Thread) | EPP Hint | Freq QoS Range | Characteristics |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`balanced`** | 🥇 Gold<br>🥈 Silver<br>🥉 Standard | Core 1, 5<br>Core 6, 7<br>Core 0, 2, 3, 4 | `performance`<br>`balance_performance`<br>`default` | 2.40 GHz – 5.26 GHz<br>2.00 GHz – 4.40 GHz<br>1.75 GHz – 3.60 GHz | Instant desktop UI responsiveness; silent ~600 RPM idle fan; standard cores stay within the Zen 4 efficiency sweet spot. |
+| **`balanced`** | 🥇 Gold<br>🥈 Silver<br>🥉 Standard | Core 1, 5<br>Core 6, 7<br>Core 0, 2, 3, 4 | `performance`<br>`balance_performance`<br>`default` | 2.40 GHz – 5.26 GHz<br>2.00 GHz – 4.40 GHz<br>1.75 GHz – 3.60 GHz | Instant desktop UI responsiveness; silent ~940 RPM idle fan floor; standard cores stay within the Zen 4 efficiency sweet spot. |
 | **`performance`** | 🥇 Gold<br>🥈 Silver<br>🥉 Standard | Core 1, 5<br>Core 6, 7<br>Core 0, 2, 3, 4 | `performance`<br>`performance`<br>`performance` | 2.80 GHz – 5.26 GHz<br>2.40 GHz – 4.80 GHz<br>2.20 GHz – 4.30 GHz | Maximum gaming throughput; capping standard cores at 4.30 GHz avoids voltage runaway, keeping temperatures ~72–76°C. |
 | **`low-power`** | 🥇 Gold<br>🥈 Silver<br>🥉 Standard | Core 1, 5<br>Core 6, 7<br>Core 0, 2, 3, 4 | `balance_performance`<br>`balance_power`<br>`power` | 1.75 GHz – 3.20 GHz<br>1.40 GHz – 2.60 GHz<br>1.20 GHz – 2.00 GHz | 35W TDP Eco profile; zero jitter on 120Hz display and video playback; inaudible 0 dB fan. |
 

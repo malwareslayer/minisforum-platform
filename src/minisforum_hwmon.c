@@ -241,11 +241,11 @@ static void mf_fan_worker(struct work_struct *work)
 	switch (data->current_profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
 		if (eff_temp <= 42)
-			desired_code = 5;  /* ~450-500 RPM ultra-silent idle */
+			desired_code = 6;  /* ~550-600 RPM whisper-silent idle */
 		else if (eff_temp <= 54)
-			desired_code = 5 + (eff_temp - 42) * 4 / 12;
+			desired_code = 6 + (eff_temp - 42) * 4 / 12;
 		else if (eff_temp <= 68)
-			desired_code = 9 + (eff_temp - 54) * 6 / 14;
+			desired_code = 10 + (eff_temp - 54) * 5 / 14;
 		else if (eff_temp <= 80)
 			desired_code = 15 + (eff_temp - 68) * 8 / 12;
 		else
@@ -254,10 +254,10 @@ static void mf_fan_worker(struct work_struct *work)
 		break;
 
 	case PLATFORM_PROFILE_PERFORMANCE:
-		if (eff_temp <= 38)
-			desired_code = 8;  /* ~800 RPM base */
+		if (eff_temp <= 40)
+			desired_code = 10;  /* ~1000 RPM performance idle floor */
 		else if (eff_temp <= 50)
-			desired_code = 8 + (eff_temp - 38) * 6 / 12;
+			desired_code = 10 + (eff_temp - 40) * 4 / 10;
 		else if (eff_temp <= 66)
 			desired_code = 14 + (eff_temp - 50) * 10 / 16;
 		else if (eff_temp <= 80)
@@ -269,12 +269,12 @@ static void mf_fan_worker(struct work_struct *work)
 
 	case PLATFORM_PROFILE_BALANCED:
 	default:
-		if (eff_temp <= 40)
-			desired_code = 5;  /* ~450-500 RPM ultra-quiet idle */
-		else if (eff_temp <= 50)
-			desired_code = 5 + (eff_temp - 40) * 5 / 10;
+		if (eff_temp <= 43)
+			desired_code = 9;  /* ~920-940 RPM inaudible idle floor (~42-43°C standby) */
+		else if (eff_temp <= 52)
+			desired_code = 9 + (eff_temp - 43) * 3 / 9;
 		else if (eff_temp <= 64)
-			desired_code = 10 + (eff_temp - 50) * 7 / 14;
+			desired_code = 12 + (eff_temp - 52) * 5 / 12;
 		else if (eff_temp <= 78)
 			desired_code = 17 + (eff_temp - 64) * 11 / 14;
 		else if (eff_temp <= 88)
