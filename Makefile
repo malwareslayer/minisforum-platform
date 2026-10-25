@@ -30,7 +30,7 @@ load:
 unload:
 	sudo rmmod $(MODULE_NAME)
 
-dkms-install:
+dkms-install: clean
 	mkdir -p $(DKMS_DIR)
 	cp -r Makefile dkms.conf src $(DKMS_DIR)/
 	dkms add -m $(MODULE_NAME) -v $(VERSION)
