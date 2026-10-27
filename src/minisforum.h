@@ -18,20 +18,19 @@
 #include <linux/hwmon.h>
 #include <linux/acpi.h>
 #include <linux/mutex.h>
-#include <linux/workqueue.h>
 #include <linux/suspend.h>
 
 #define DRV_NAME	"minisforum_platform"
-#define DRV_VERSION	"0.3.5"
+#define DRV_VERSION	"0.4.0"
 
 /*
  * Standard hwmon pwmN_enable semantics (Documentation/hwmon/sysfs-interface.rst).
- * MODE_AUTO keeps the in-kernel EMA governor as the default, so existing
- * behaviour is unchanged for users that never touch sysfs.
+ * No thermal policy lives in this driver: MODE_AUTO hands the fan back to the
+ * EC firmware's own curve, and custom curves belong in userspace.
  */
 #define MF_PWM_ENABLE_FULL	0	/* No fan speed control: fan at full speed */
 #define MF_PWM_ENABLE_MANUAL	1	/* Manual: userspace owns pwm1 */
-#define MF_PWM_ENABLE_AUTO	2	/* Automatic: in-kernel thermal governor */
+#define MF_PWM_ENABLE_AUTO	2	/* Automatic: EC firmware thermal curve */
 
 /* EC fan duty is a 0..51 code; hwmon exposes the standard 0..255 range. */
 #define MF_MAX_FAN_CODE		51
@@ -44,6 +43,9 @@
  * stray "echo 0 > pwm1" cannot stop the CPU fan.
  */
 #define MF_MANUAL_MIN_CODE	5
+
+/* Number of temperature bands in the EC fan lookup table. */
+#define MF_FAN_CURVE_BANDS	7
 
 /* EC Register Map (ACPI EC 0x62/0x66 address space) */
 #define MF_EC_REG_VER_MAJ		0x02
@@ -90,16 +92,11 @@ struct minisforum_data {
 	const struct minisforum_board_config *board;
 	enum platform_profile_option current_profile;
 	struct mutex lock; /* Protects EC communication and state transitions */
-	u8 pwm_enable;     /* pwm1_enable: 0 = full, 1 = manual, 2 = automatic */
+	u8 pwm_enable;     /* 0 = full, 1 = manual, 2 = EC firmware curve */
+	u8 fan_code;       /* Duty currently programmed into the EC (0..51) */
 	u8 manual_code;    /* Last duty requested by userspace (0..51) */
-	u8 fan_target_code;
-	u8 fan_desired_code;
-	u8 fan_baseline_bases[7];
-	u8 fan_baseline_slopes[7];
-	struct delayed_work fan_work;
-	int temp_ema;
-	int cooldown_timer;
-	bool has_amd_pstate;
+	u8 fan_baseline_bases[MF_FAN_CURVE_BANDS];
+	u8 fan_baseline_slopes[MF_FAN_CURVE_BANDS];
 	struct notifier_block pm_nb;
 };
 
@@ -111,8 +108,7 @@ int minisforum_profile_set(struct minisforum_data *data,
 
 int minisforum_hwmon_init(struct minisforum_data *data);
 void minisforum_hwmon_exit(struct minisforum_data *data);
-int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data,
-					 enum platform_profile_option profile);
+void minisforum_hwmon_resume(struct minisforum_data *data);
 
 /* Safe EC helpers */
 int minisforum_ec_read(u8 addr, u8 *val);

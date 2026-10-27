@@ -11,9 +11,8 @@ A modular Linux kernel platform and hardware monitoring driver for Minisforum Mi
 ## ✨ Features
 
 * **⚡ Native ACPI Platform Profile:** Seamlessly integrates with `/sys/firmware/acpi/platform_profile` (`low-power`, `balanced`, `performance`), directing hardware power states straight to the Embedded Controller (EC).
-* **❄️ In-Kernel Dynamic Thermal Governor (Zero-Daemon):** Directly drives the Embedded Controller (EC) using an Exponential Moving Average (EMA) of composite system temperatures. Provides an inaudible ~600–940 RPM idle floor, smooth stepped rate-limiting (+100 RPM/sec), and cooldown hysteresis.
-* **📊 Hardware Monitoring (`hwmon`):** Exposes CPU, Motherboard, and VRM temperature sensors, dual fan tachometers, and manual PWM overrides (`pwm1` / `pwm1_enable`).
-* **🛡️ Zero-Parameter DMI Auto-Detection:** Automatically matches hardware across UM-series models without requiring custom module parameters or intrusive frequency overrides.
+* **📊 Hardware Monitoring (`hwmon`):** Exposes CPU, Motherboard, and VRM temperature sensors, dual fan tachometers, and standard PWM fan control (`pwm1` / `pwm1_enable` / `pwm1_mode`) that `fancontrol`, `pwmconfig` and CoolerControl drive directly.
+* **🛡️ Zero-Parameter, Mechanism-Only:** No module parameters, no CPU frequency overrides, and no in-kernel thermal policy. Custom fan curves belong in userspace, exactly as the hwmon ABI intends.
 
 ---
 
@@ -114,7 +113,7 @@ CoolerControl can drive the fan directly:
 | :--- | :--- | :--- |
 | `pwm1_enable` | `0` | no control — fan forced to full speed |
 | | `1` | manual — userspace owns `pwm1` |
-| | `2` | **automatic (default)** — in-kernel EMA thermal governor |
+| | `2` | **automatic (default)** — EC firmware thermal curve |
 | `pwm1` | `25`–`255` | requested duty (0–100%), writable in manual mode only |
 | `pwm1_mode` | `1` | PWM modulation (read-only) |
 
@@ -125,7 +124,7 @@ HWMON_DIR=$(dirname $(grep -l "minisforum" /sys/class/hwmon/hwmon*/name))
 echo 1   | sudo tee $HWMON_DIR/pwm1_enable
 echo 65  | sudo tee $HWMON_DIR/pwm1
 
-# Hand the fan back to the in-kernel governor
+# Hand the fan back to the EC firmware curve
 echo 2   | sudo tee $HWMON_DIR/pwm1_enable
 ```
 
@@ -137,8 +136,14 @@ automatically, so tools that write `pwm1` directly also work.
 sudo pwmconfig                      # detects fan1/pwm1 and generates a config
 sudo systemctl enable --now fancontrol
 ```
-While `pwm1_enable=1`, the in-kernel EMA governor is suspended and profile
-changes no longer touch the fan. Switch back to `2` to re-enable it.
+While `pwm1_enable=1`, the driver does not touch the fan at all and profile
+changes no longer affect it. In mode `2` the EC firmware owns the curve, so
+`pwm1` reads `0` — use `fan1_input` for the actual speed.
+
+> **Idle noise:** with no in-kernel thermal policy the fan simply follows the
+> Minisforum factory curve, which is usually more aggressive than a hand-tuned
+> one. For a quieter idle, build a curve in userspace with `fancontrol` (or
+> CoolerControl) instead of expecting the kernel to invent one.
 
 > **Safety notes**
 > * Manual duty is clamped to a floor of `25` (code 5, ~450–500 RPM): a stray

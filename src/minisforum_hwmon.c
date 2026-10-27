@@ -2,13 +2,17 @@
 /*
  * Minisforum Hardware Monitoring Driver (HWMON)
  *
- * Exposes temperatures, fan speeds, PWM manual control, and an in-kernel
- * composite thermal governor with stepped rate-limited EC writes.
+ * Exposes the board temperature sensors, fan tachometers and standard PWM
+ * fan control (pwm1 / pwm1_enable / pwm1_mode).
+ *
+ * This driver implements mechanism only and carries no thermal policy of its
+ * own. pwm1_enable 2 hands the fan back to the EC firmware's autonomous
+ * curve; a custom curve belongs in userspace (fancontrol, CoolerControl)
+ * via pwm1_enable 1.
  */
 
 #include <linux/io.h>
 #include <linux/delay.h>
-#include <linux/workqueue.h>
 #include "minisforum.h"
 
 /* IT5571 Tachometer Register Addresses */
@@ -22,9 +26,13 @@
 #define MF_REG_CPU_BASE_START	0x0310
 #define MF_REG_CPU_SLOPE_BASE	0x08B0
 
-/* Factory BIOS Baseline (Restored on module unload) */
-static const u8 mf_bios_baseline_bases[7]  = { 0, 16, 18, 21, 28, 34, 36 };
-static const u8 mf_bios_baseline_slopes[7] = { 0, 10, 33, 58, 60, 16, 200 };
+/*
+ * Factory curve of this board, used only when the EC snapshot at probe does
+ * not look sane. It is never written unless the fan is handed back to the
+ * firmware or the module is unloaded.
+ */
+static const u8 mf_fallback_bases[MF_FAN_CURVE_BANDS]  = { 0, 16, 18, 21, 28, 34, 36 };
+static const u8 mf_fallback_slopes[MF_FAN_CURVE_BANDS] = { 0, 10, 33, 58, 60, 16, 200 };
 
 static const char * const mf_temp_labels[] = {
 	"CPU EC",
@@ -99,25 +107,68 @@ static void mf_sio_sram_write(u16 addr, u8 val)
 
 /*
  * Writes a 7-band hardware fan curve (bases and slopes) to EC XRAM.
- * Leaves critical safety protection row (>= 94C at 0x0325) untouched.
+ * Leaves the critical safety protection row (>= 94C at 0x0325) untouched.
  */
-static int mf_write_curve_table(struct minisforum_data *data, const u8 *bases, const u8 *slopes)
+static void mf_write_curve_table(struct minisforum_data *data,
+				 const u8 *bases, const u8 *slopes)
 {
 	int i;
 
 	mutex_lock(&data->lock);
 	mf_sio_enter();
 
-	for (i = 0; i < 7; i++)
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_SLOPE_BASE + i, slopes[i]);
 
-	for (i = 0; i < 7; i++)
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_BASE_START + (i * 3), bases[i]);
 
 	mf_sio_exit();
 	mutex_unlock(&data->lock);
+}
 
-	return 0;
+/*
+ * Snapshot the EC's own fan curve so it can be handed back untouched when
+ * userspace releases the fan or the module is unloaded. Reading the live
+ * table (instead of trusting a hardcoded one) keeps the firmware in charge
+ * of what "automatic" actually means.
+ */
+static void mf_snapshot_curve(struct minisforum_data *data)
+{
+	u8 bases[MF_FAN_CURVE_BANDS];
+	u8 slopes[MF_FAN_CURVE_BANDS];
+	bool sane = true;
+	int i;
+
+	mutex_lock(&data->lock);
+	mf_sio_enter();
+
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
+		mf_sio_sram_read(MF_REG_CPU_SLOPE_BASE + i, &slopes[i]);
+
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
+		mf_sio_sram_read(MF_REG_CPU_BASE_START + (i * 3), &bases[i]);
+
+	mf_sio_exit();
+	mutex_unlock(&data->lock);
+
+	/* A band target above the EC's duty range means the read went wrong. */
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++) {
+		if (bases[i] > MF_MAX_FAN_CODE)
+			sane = false;
+	}
+
+	if (sane) {
+		memcpy(data->fan_baseline_bases, bases, sizeof(bases));
+		memcpy(data->fan_baseline_slopes, slopes, sizeof(slopes));
+	} else {
+		memcpy(data->fan_baseline_bases, mf_fallback_bases,
+		       sizeof(mf_fallback_bases));
+		memcpy(data->fan_baseline_slopes, mf_fallback_slopes,
+		       sizeof(mf_fallback_slopes));
+		dev_warn(&data->pdev->dev,
+			 "EC fan curve unreadable, using factory defaults\n");
+	}
 }
 
 /*
@@ -153,7 +204,11 @@ static int mf_read_fan_rpm(struct minisforum_data *data, u16 addr_lo, u16 addr_h
 }
 
 /*
- * Applies a fan speed target code (0..51) to the 7 temperature bands.
+ * Programs a fixed duty code into every temperature band, which turns the
+ * EC's lookup table into a constant target. The EC firmware then holds that
+ * duty on its own: no periodic rewrite from the kernel is needed, so this
+ * stays a mechanism rather than a policy.
+ *
  * Leaves the critical hardware thermal protection band (>= 94C) untouched.
  */
 static int mf_apply_fan_code(struct minisforum_data *data, u8 code)
@@ -165,206 +220,54 @@ static int mf_apply_fan_code(struct minisforum_data *data, u8 code)
 	mutex_lock(&data->lock);
 	mf_sio_enter();
 
-	/* Set all 7 slopes to 0 for a fixed target */
-	for (i = 0; i < 7; i++)
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_SLOPE_BASE + i, 0);
 
-	/* Set all 7 base targets to requested code */
-	for (i = 0; i < 7; i++)
+	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_BASE_START + (i * 3), code);
 
 	mf_sio_exit();
 
-	data->fan_target_code = code;
+	data->fan_code = code;
 	mutex_unlock(&data->lock);
 
 	return 0;
 }
 
 /*
- * Dynamic Governor Worker:
- * Evaluates composite system temperature (CPU die + VRM + Board)
- * with low-pass exponential moving average filtering, and applies
- * stepped rate-limited EC writes with cooldown hysteresis.
- */
-static void mf_fan_worker(struct work_struct *work)
-{
-	struct minisforum_data *data = container_of(work, struct minisforum_data, fan_work.work);
-	u8 t_cpu = 0, t_vrm = 0, t_board = 0;
-	int comp_temp, eff_temp;
-	u8 desired_code, current_code, next_code;
-	int ret;
-
-	/* Read composite temperatures from EC */
-	ret = minisforum_ec_read(MF_EC_REG_TEMP_CPU, &t_cpu);
-	if (ret)
-		goto reschedule;
-	ret = minisforum_ec_read(MF_EC_REG_TEMP_VRM, &t_vrm);
-	if (ret)
-		t_vrm = t_cpu;
-	ret = minisforum_ec_read(MF_EC_REG_TEMP_BOARD, &t_board);
-	if (ret)
-		t_board = t_cpu;
-
-	/*
-	 * System Composite Weighted Temperature:
-	 * 60% CPU/iGPU die + 20% VRM + 20% Motherboard.
-	 * Accounts for both compute load and power delivery heat.
-	 */
-	comp_temp = ((int)t_cpu * 3 + (int)t_vrm + (int)t_board) / 5;
-
-	/*
-	 * Asymmetric Exponential Moving Average (EMA) low-pass filter:
-	 * - Rapid response on thermal surge (alpha = 0.50) for compute load.
-	 * - Deep damping on cooling / transient Zen 4 spikes (alpha = 0.125).
-	 */
-	if (data->temp_ema == 0) {
-		data->temp_ema = comp_temp * 1000;
-	} else {
-		int current_scaled = comp_temp * 1000;
-
-		if (current_scaled > data->temp_ema)
-			data->temp_ema = (data->temp_ema + current_scaled) / 2;
-		else
-			data->temp_ema = (data->temp_ema * 7 + current_scaled) / 8;
-	}
-
-	eff_temp = data->temp_ema / 1000;
-
-	/*
-	 * Userspace-owned modes are re-asserted on every tick. The EC firmware
-	 * keeps its own fan curve and will happily reclaim the duty registers,
-	 * so writing once and stopping makes pwm1 "drift" back under load.
-	 * Re-writing here is cheap and removes any need to cancel the timer,
-	 * which in turn means no cancel_delayed_work_sync() vs data->lock
-	 * deadlock can ever happen.
-	 */
-	if (data->pwm_enable == MF_PWM_ENABLE_FULL) {
-		mf_apply_fan_code(data, MF_MAX_FAN_CODE);
-		goto reschedule;
-	}
-
-	if (data->pwm_enable == MF_PWM_ENABLE_MANUAL) {
-		mf_apply_fan_code(data, data->manual_code);
-		goto reschedule;
-	}
-
-	/* Determine fan speed target code with continuous gradual interpolation */
-	switch (data->current_profile) {
-	case PLATFORM_PROFILE_LOW_POWER:
-		if (eff_temp <= 42)
-			desired_code = 6;  /* ~550-600 RPM whisper-silent idle */
-		else if (eff_temp <= 54)
-			desired_code = 6 + (eff_temp - 42) * 4 / 12;
-		else if (eff_temp <= 68)
-			desired_code = 10 + (eff_temp - 54) * 5 / 14;
-		else if (eff_temp <= 80)
-			desired_code = 15 + (eff_temp - 68) * 8 / 12;
-		else
-			desired_code = clamp_val(23 + (eff_temp - 80) * 10 / 10,
-						 23, 34);
-		break;
-
-	case PLATFORM_PROFILE_PERFORMANCE:
-		if (eff_temp <= 40)
-			desired_code = 10;  /* ~1000 RPM performance idle floor */
-		else if (eff_temp <= 50)
-			desired_code = 10 + (eff_temp - 40) * 4 / 10;
-		else if (eff_temp <= 66)
-			desired_code = 14 + (eff_temp - 50) * 10 / 16;
-		else if (eff_temp <= 80)
-			desired_code = 24 + (eff_temp - 66) * 12 / 14;
-		else
-			desired_code = clamp_val(36 + (eff_temp - 80) * 12 / 10,
-						 36, MF_MAX_FAN_CODE);
-		break;
-
-	case PLATFORM_PROFILE_BALANCED:
-	default:
-		if (eff_temp <= 43)
-			/* ~920-940 RPM inaudible idle floor (~42-43°C standby) */
-			desired_code = 9;
-		else if (eff_temp <= 52)
-			desired_code = 9 + (eff_temp - 43) * 3 / 9;
-		else if (eff_temp <= 64)
-			desired_code = 12 + (eff_temp - 52) * 5 / 12;
-		else if (eff_temp <= 78)
-			desired_code = 17 + (eff_temp - 64) * 11 / 14;
-		else if (eff_temp <= 88)
-			desired_code = 28 + (eff_temp - 78) * 12 / 10;
-		else
-			desired_code = clamp_val(40 + (eff_temp - 88) * 8 / 6,
-						 40, MF_MAX_FAN_CODE);
-		break;
-	}
-
-	data->fan_desired_code = desired_code;
-	current_code = data->fan_target_code;
-	next_code = current_code;
-
-	/*
-	 * Stepped Rate Limiting & Cooldown Hysteresis:
-	 * - Heating up: step up smoothly (+1 per second, or +2 if large thermal surge)
-	 * - Cooling down: hold for 4 seconds hysteresis, then step down -1 per 2 seconds
-	 */
-	if (desired_code > current_code) {
-		data->cooldown_timer = 0;
-		if (desired_code - current_code >= 6)
-			next_code = current_code + 2;
-		else
-			next_code = current_code + 1;
-	} else if (desired_code < current_code) {
-		data->cooldown_timer++;
-		if (data->cooldown_timer >= 4) {
-			next_code = current_code - 1;
-			data->cooldown_timer = 2; /* Step down 1 code every 2 ticks */
-		}
-	} else {
-		data->cooldown_timer = 0;
-	}
-
-	if (next_code != current_code)
-		mf_apply_fan_code(data, next_code);
-
-reschedule:
-	queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
-}
-
-int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data,
-					 enum platform_profile_option profile)
-{
-	data->cooldown_timer = 0;
-	/* Trigger immediate re-evaluation on profile switch */
-	mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
-	return 0;
-}
-
-/*
  * Map the standard pwm1_enable values onto the EC fan registers.
- * The governor work item is never cancelled, so switching modes cannot
- * deadlock against data->lock and userspace-requested duty is re-asserted
- * on every tick (see mf_fan_worker).
  */
 static int mf_set_pwm_enable(struct minisforum_data *data, long val)
 {
 	switch (val) {
 	case MF_PWM_ENABLE_FULL:
+		/* No fan speed control: run the fan at full speed. */
 		data->pwm_enable = MF_PWM_ENABLE_FULL;
 		return mf_apply_fan_code(data, MF_MAX_FAN_CODE);
 
 	case MF_PWM_ENABLE_MANUAL:
-		/* Start from the duty that is currently programmed: no jump. */
-		if (data->pwm_enable != MF_PWM_ENABLE_MANUAL)
-			data->manual_code = data->fan_target_code;
+		/* Userspace owns pwm1. Start from the duty in effect: no jump. */
+		if (data->pwm_enable != MF_PWM_ENABLE_MANUAL) {
+			data->manual_code = data->fan_code;
+			if (data->manual_code < MF_MANUAL_MIN_CODE)
+				data->manual_code = MF_MANUAL_MIN_CODE;
+		}
 		data->pwm_enable = MF_PWM_ENABLE_MANUAL;
 		return mf_apply_fan_code(data, data->manual_code);
 
 	case MF_PWM_ENABLE_AUTO:
+		/* Hand the fan back to the EC firmware's own thermal curve. */
 		data->pwm_enable = MF_PWM_ENABLE_AUTO;
-		data->cooldown_timer = 0;
-		mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
-		dev_info(&data->pdev->dev,
-			 "CPU fan control returned to in-kernel thermal governor\n");
+		/*
+		 * No single duty is programmed by the driver in this mode, so
+		 * pwm1 must stop reporting the last manual value. Read
+		 * fan1_input for the resulting speed.
+		 */
+		data->fan_code = 0;
+		mf_write_curve_table(data, data->fan_baseline_bases,
+				     data->fan_baseline_slopes);
+		dev_dbg(&data->pdev->dev,
+			"CPU fan handed back to EC firmware curve\n");
 		return 0;
 
 	default:
@@ -374,22 +277,22 @@ static int mf_set_pwm_enable(struct minisforum_data *data, long val)
 
 static int mf_set_fan_pwm(struct minisforum_data *data, long pwm)
 {
+	/*
+	 * Clamp to the lowest duty the EC drives the fan without stalling so
+	 * that a stray "echo 0 > pwm1" cannot stop the CPU fan.
+	 */
 	u8 code = clamp_val(DIV_ROUND_CLOSEST(pwm * MF_MAX_FAN_CODE,
 					      MF_HWMON_PWM_MAX),
 			    MF_MANUAL_MIN_CODE, MF_MAX_FAN_CODE);
 
 	/*
 	 * Writing pwm1 is an explicit request to own the fan. Flip to manual
-	 * instead of returning -EPERM so that tools which write pwm1 before
-	 * touching pwm1_enable (CoolerControl, fan2go, plain scripts) work too.
+	 * instead of returning -EPERM so tools that write the duty before
+	 * touching pwm1_enable (CoolerControl, plain scripts) work too.
 	 */
-	if (data->pwm_enable != MF_PWM_ENABLE_MANUAL) {
-		dev_info(&data->pdev->dev,
-			 "pwm1 written: switching CPU fan to manual control\n");
-		data->pwm_enable = MF_PWM_ENABLE_MANUAL;
-	}
-
+	data->pwm_enable = MF_PWM_ENABLE_MANUAL;
 	data->manual_code = code;
+
 	return mf_apply_fan_code(data, code);
 }
 
@@ -470,10 +373,12 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	case hwmon_fan:
 		switch (channel) {
 		case 0:
-			*val = mf_read_fan_rpm(data, MF_REG_TACH_CPU_LO, MF_REG_TACH_CPU_HI);
+			*val = mf_read_fan_rpm(data, MF_REG_TACH_CPU_LO,
+					       MF_REG_TACH_CPU_HI);
 			return 0;
 		case 1:
-			*val = mf_read_fan_rpm(data, MF_REG_TACH_SYS_LO, MF_REG_TACH_SYS_HI);
+			*val = mf_read_fan_rpm(data, MF_REG_TACH_SYS_LO,
+					       MF_REG_TACH_SYS_HI);
 			return 0;
 		default:
 			return -EOPNOTSUPP;
@@ -482,10 +387,9 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	case hwmon_pwm:
 		switch (attr) {
 		case hwmon_pwm_input:
-			*val = clamp_val(DIV_ROUND_CLOSEST((long)data->fan_target_code *
-							   MF_HWMON_PWM_MAX,
-							   MF_MAX_FAN_CODE),
-					 0, MF_HWMON_PWM_MAX);
+			*val = DIV_ROUND_CLOSEST((long)data->fan_code *
+						 MF_HWMON_PWM_MAX,
+						 MF_MAX_FAN_CODE);
 			return 0;
 		case hwmon_pwm_enable:
 			*val = data->pwm_enable;
@@ -578,33 +482,15 @@ static const struct hwmon_chip_info mf_chip_info = {
 
 int minisforum_hwmon_init(struct minisforum_data *data)
 {
-	/* Copy factory BIOS baseline for safe restoration on driver exit */
-	memcpy(data->fan_baseline_bases, mf_bios_baseline_bases, sizeof(mf_bios_baseline_bases));
-	memcpy(data->fan_baseline_slopes, mf_bios_baseline_slopes, sizeof(mf_bios_baseline_slopes));
-
 	/*
-	 * Default to automatic: the in-kernel EMA governor owns the fan, so
-	 * behaviour is unchanged for anyone who never touches sysfs.
+	 * Remember the firmware's own curve, then leave the EC alone: the fan
+	 * stays under firmware control until userspace explicitly asks for it.
 	 */
+	mf_snapshot_curve(data);
+
 	data->pwm_enable = MF_PWM_ENABLE_AUTO;
-	data->manual_code = 6;
-	data->fan_target_code = 6;
-	data->fan_desired_code = 6;
-	data->temp_ema = 0;
-	data->cooldown_timer = 0;
-
-	if (data->has_amd_pstate) {
-		/* Apply initial code 6 floor */
-		mf_apply_fan_code(data, 6);
-
-		/* Initialize and start the dynamic governor workqueue */
-		INIT_DELAYED_WORK(&data->fan_work, mf_fan_worker);
-		queue_delayed_work(system_dfl_wq, &data->fan_work, msecs_to_jiffies(1000));
-	} else {
-		/* Non-AMD P-State: restore native BIOS curve table */
-		mf_write_curve_table(data, data->fan_baseline_bases, data->fan_baseline_slopes);
-		dev_info(&data->pdev->dev, "Preserving native BIOS autonomous fan control (no AMD P-State)\n");
-	}
+	data->manual_code = 0;
+	data->fan_code = 0;
 
 	data->hwmon_dev = hwmon_device_register_with_info(&data->pdev->dev,
 							  "minisforum",
@@ -614,8 +500,6 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 	if (IS_ERR(data->hwmon_dev)) {
 		dev_err(&data->pdev->dev, "Failed to register hwmon device: %ld\n",
 			PTR_ERR(data->hwmon_dev));
-		if (data->has_amd_pstate)
-			cancel_delayed_work_sync(&data->fan_work);
 		return PTR_ERR(data->hwmon_dev);
 	}
 
@@ -625,15 +509,34 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 
 void minisforum_hwmon_exit(struct minisforum_data *data)
 {
-	/* Stop dynamic governor workqueue if active */
-	if (data->has_amd_pstate)
-		cancel_delayed_work_sync(&data->fan_work);
-
-	/* Restore factory BIOS baseline curve to ensure safety after unload */
-	mf_write_curve_table(data, data->fan_baseline_bases, data->fan_baseline_slopes);
+	/*
+	 * Never leave the fan stuck at a userspace duty: hand it back to the
+	 * firmware curve we snapshotted at probe.
+	 */
+	if (data->pwm_enable != MF_PWM_ENABLE_AUTO)
+		mf_write_curve_table(data, data->fan_baseline_bases,
+				     data->fan_baseline_slopes);
 
 	if (data->hwmon_dev) {
 		hwmon_device_unregister(data->hwmon_dev);
 		data->hwmon_dev = NULL;
+	}
+}
+
+/*
+ * The EC resets to its own curve across suspend, so a manual duty has to be
+ * re-applied (and an automatic one is already what the firmware restores).
+ */
+void minisforum_hwmon_resume(struct minisforum_data *data)
+{
+	switch (data->pwm_enable) {
+	case MF_PWM_ENABLE_FULL:
+		mf_apply_fan_code(data, MF_MAX_FAN_CODE);
+		break;
+	case MF_PWM_ENABLE_MANUAL:
+		mf_apply_fan_code(data, data->manual_code);
+		break;
+	default:
+		break;
 	}
 }

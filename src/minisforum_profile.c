@@ -6,19 +6,7 @@
  * translating user profile selections directly to ACPI EC registers.
  */
 
-#include <linux/cpufreq.h>
 #include "minisforum.h"
-
-static bool mf_detect_amd_pstate(void)
-{
-	const char *driver = cpufreq_get_current_driver();
-
-	if (!driver)
-		return false;
-
-	return (strncmp(driver, "amd-pstate", 10) == 0 ||
-		strncmp(driver, "amd_pstate", 10) == 0);
-}
 
 static int mf_profile_probe(void *drvdata, unsigned long *choices)
 {
@@ -55,15 +43,15 @@ int minisforum_profile_set(struct minisforum_data *data,
 	switch (profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
 		ec_code = MF_EC_PROFILE_QUIET;
-		dev_info(dev, "Switching to Low Power (Quiet / Eco)\n");
+		dev_dbg(dev, "Switching to Low Power (Quiet / Eco)\n");
 		break;
 	case PLATFORM_PROFILE_BALANCED:
 		ec_code = MF_EC_PROFILE_BALANCED;
-		dev_info(dev, "Switching to Balanced\n");
+		dev_dbg(dev, "Switching to Balanced\n");
 		break;
 	case PLATFORM_PROFILE_PERFORMANCE:
 		ec_code = MF_EC_PROFILE_PERFORMANCE;
-		dev_info(dev, "Switching to Performance\n");
+		dev_dbg(dev, "Switching to Performance\n");
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -76,9 +64,6 @@ int minisforum_profile_set(struct minisforum_data *data,
 
 	data->current_profile = profile;
 	mutex_unlock(&data->lock);
-
-	/* Synchronize hardware EC fan curve to match active profile */
-	minisforum_hwmon_apply_profile_curve(data, profile);
 
 	return 0;
 }
@@ -100,8 +85,6 @@ int minisforum_profile_init(struct minisforum_data *data)
 {
 	u8 initial_ec_profile = 0;
 	int ret;
-
-	data->has_amd_pstate = mf_detect_amd_pstate();
 
 	ret = minisforum_ec_read(MF_EC_REG_CPU_PROFILE, &initial_ec_profile);
 	if (ret == 0) {

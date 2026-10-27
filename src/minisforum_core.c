@@ -114,14 +114,12 @@ static int minisforum_pm_notify(struct notifier_block *nb,
 	case PM_POST_SUSPEND:
 	case PM_POST_HIBERNATION:
 	case PM_POST_RESTORE:
-		dev_info(&mf->pdev->dev,
-			 "System resumed from sleep: restoring hardware profile and QoS\n");
-		/* Reset EMA filter to prevent pre-suspend temperature carryover */
-		mf->temp_ema = 0;
-		mf->cooldown_timer = 0;
-
-		/* Re-apply profile, EC fan table, frequency QoS, and CPPC EPP */
+		/*
+		 * The EC resets its profile register and fan curve across
+		 * suspend, so both have to be re-applied on resume.
+		 */
 		minisforum_profile_set(mf, mf->current_profile);
+		minisforum_hwmon_resume(mf);
 		break;
 	default:
 		break;
