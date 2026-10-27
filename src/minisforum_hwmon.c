@@ -26,6 +26,11 @@
 #define MF_REG_CPU_BASE_START	0x0310
 #define MF_REG_CPU_SLOPE_BASE	0x08B0
 
+/* ITE Super I/O config-space indirect access registers */
+#define MF_SIO_IDX_SMFI_REG	0x11	/* SMFI address high */
+#define MF_SIO_IDX_SMFI_ADDR	0x10	/* SMFI address low */
+#define MF_SIO_IDX_SMFI_DATA	0x12	/* SMFI data */
+
 /*
  * Factory curve of this board, used only when the EC snapshot at probe does
  * not look sane. It is never written unless the fan is handed back to the
@@ -46,62 +51,77 @@ static const char * const mf_fan_labels[] = {
 };
 
 /*
- * Super I/O entry and exit helpers.
+ * Claim the Super I/O configuration window and unlock it.
+ *
+ * MF_SIO_PORT_DEFAULT is shared with the generic it87 driver, which claims
+ * the same two ports, so the window must be reserved before it is touched and
+ * released afterwards. Returns -EBUSY when another driver holds it; callers
+ * propagate that instead of writing to an unowned port.
  */
-static void mf_sio_enter(void)
+static int mf_sio_lock(void)
 {
+	if (!request_muxed_region(MF_SIO_PORT_DEFAULT, MF_SIO_WINDOW_SIZE,
+				  DRV_NAME))
+		return -EBUSY;
+
+	/* ITE config-space unlock sequence: 0x87, 0x01, 0x55, 0xAA-equivalent. */
 	outb(0x87, MF_SIO_PORT_DEFAULT);
 	outb(0x01, MF_SIO_PORT_DEFAULT);
 	outb(0x55, MF_SIO_PORT_DEFAULT);
 	outb(0x55, MF_SIO_PORT_DEFAULT);
+
+	return 0;
 }
 
-static void mf_sio_exit(void)
+static void mf_sio_unlock(void)
 {
 	outb(0x02, MF_SIO_PORT_DEFAULT);
 	outb(0x02, MF_SIO_DATA_DEFAULT);
+
+	release_region(MF_SIO_PORT_DEFAULT, MF_SIO_WINDOW_SIZE);
 }
 
 /*
- * Low-level Super I/O SMFI indirect SRAM read for ITE IT5571.
- * Accesses on-chip peripheral registers and XRAM.
+ * Indirect SRAM read through the SMFI interface. The Super I/O window must
+ * already be claimed by mf_sio_lock().
  */
 static void mf_sio_sram_read(u16 addr, u8 *val)
 {
-	outb(0x2E, MF_SIO_PORT_DEFAULT);
-	outb(0x11, MF_SIO_DATA_DEFAULT);
-	outb(0x2F, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_PORT_DEFAULT, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_IDX_SMFI_REG, MF_SIO_DATA_DEFAULT);
+	outb(MF_SIO_DATA_DEFAULT, MF_SIO_PORT_DEFAULT);
 	outb((addr >> 8) & 0xFF, MF_SIO_DATA_DEFAULT);
 
-	outb(0x2E, MF_SIO_PORT_DEFAULT);
-	outb(0x10, MF_SIO_DATA_DEFAULT);
-	outb(0x2F, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_PORT_DEFAULT, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_IDX_SMFI_ADDR, MF_SIO_DATA_DEFAULT);
+	outb(MF_SIO_DATA_DEFAULT, MF_SIO_PORT_DEFAULT);
 	outb(addr & 0xFF, MF_SIO_DATA_DEFAULT);
 
-	outb(0x2E, MF_SIO_PORT_DEFAULT);
-	outb(0x12, MF_SIO_DATA_DEFAULT);
-	outb(0x2F, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_PORT_DEFAULT, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_IDX_SMFI_DATA, MF_SIO_DATA_DEFAULT);
+	outb(MF_SIO_DATA_DEFAULT, MF_SIO_PORT_DEFAULT);
 	*val = inb(MF_SIO_DATA_DEFAULT);
 }
 
 /*
- * Low-level Super I/O SMFI indirect SRAM write for ITE IT5571.
+ * Indirect SRAM write through the SMFI interface. The Super I/O window must
+ * already be claimed by mf_sio_lock().
  */
 static void mf_sio_sram_write(u16 addr, u8 val)
 {
-	outb(0x2E, MF_SIO_PORT_DEFAULT);
-	outb(0x11, MF_SIO_DATA_DEFAULT);
-	outb(0x2F, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_PORT_DEFAULT, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_IDX_SMFI_REG, MF_SIO_DATA_DEFAULT);
+	outb(MF_SIO_DATA_DEFAULT, MF_SIO_PORT_DEFAULT);
 	outb((addr >> 8) & 0xFF, MF_SIO_DATA_DEFAULT);
 
-	outb(0x2E, MF_SIO_PORT_DEFAULT);
-	outb(0x10, MF_SIO_DATA_DEFAULT);
-	outb(0x2F, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_PORT_DEFAULT, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_IDX_SMFI_ADDR, MF_SIO_DATA_DEFAULT);
+	outb(MF_SIO_DATA_DEFAULT, MF_SIO_PORT_DEFAULT);
 	outb(addr & 0xFF, MF_SIO_DATA_DEFAULT);
 
-	outb(0x2E, MF_SIO_PORT_DEFAULT);
-	outb(0x12, MF_SIO_DATA_DEFAULT);
-	outb(0x2F, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_PORT_DEFAULT, MF_SIO_PORT_DEFAULT);
+	outb(MF_SIO_IDX_SMFI_DATA, MF_SIO_DATA_DEFAULT);
+	outb(MF_SIO_DATA_DEFAULT, MF_SIO_PORT_DEFAULT);
 	outb(val, MF_SIO_DATA_DEFAULT);
 }
 
@@ -109,13 +129,16 @@ static void mf_sio_sram_write(u16 addr, u8 val)
  * Writes a 7-band hardware fan curve (bases and slopes) to EC XRAM.
  * Leaves the critical safety protection row (>= 94C at 0x0325) untouched.
  */
-static void mf_write_curve_table(struct minisforum_data *data,
-				 const u8 *bases, const u8 *slopes)
+static int mf_write_curve_table(struct minisforum_data *data,
+				const u8 *bases, const u8 *slopes)
 {
-	int i;
+	int ret, i;
 
 	mutex_lock(&data->lock);
-	mf_sio_enter();
+
+	ret = mf_sio_lock();
+	if (ret)
+		goto out_unlock;
 
 	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_SLOPE_BASE + i, slopes[i]);
@@ -123,8 +146,11 @@ static void mf_write_curve_table(struct minisforum_data *data,
 	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_BASE_START + (i * 3), bases[i]);
 
-	mf_sio_exit();
+	mf_sio_unlock();
+
+out_unlock:
 	mutex_unlock(&data->lock);
+	return ret;
 }
 
 /*
@@ -138,51 +164,60 @@ static void mf_snapshot_curve(struct minisforum_data *data)
 	u8 bases[MF_FAN_CURVE_BANDS];
 	u8 slopes[MF_FAN_CURVE_BANDS];
 	bool sane = true;
-	int i;
+	int ret, i;
 
 	mutex_lock(&data->lock);
-	mf_sio_enter();
+	ret = mf_sio_lock();
+	if (!ret) {
+		for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
+			mf_sio_sram_read(MF_REG_CPU_SLOPE_BASE + i,
+					 &slopes[i]);
 
-	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
-		mf_sio_sram_read(MF_REG_CPU_SLOPE_BASE + i, &slopes[i]);
+		for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
+			mf_sio_sram_read(MF_REG_CPU_BASE_START + (i * 3),
+					 &bases[i]);
 
-	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
-		mf_sio_sram_read(MF_REG_CPU_BASE_START + (i * 3), &bases[i]);
-
-	mf_sio_exit();
+		mf_sio_unlock();
+	}
 	mutex_unlock(&data->lock);
 
 	/* A band target above the EC's duty range means the read went wrong. */
-	for (i = 0; i < MF_FAN_CURVE_BANDS; i++) {
-		if (bases[i] > MF_MAX_FAN_CODE)
-			sane = false;
+	if (!ret) {
+		for (i = 0; i < MF_FAN_CURVE_BANDS; i++) {
+			if (bases[i] > MF_MAX_FAN_CODE)
+				sane = false;
+		}
 	}
 
-	if (sane) {
+	if (!ret && sane) {
 		memcpy(data->fan_baseline_bases, bases, sizeof(bases));
 		memcpy(data->fan_baseline_slopes, slopes, sizeof(slopes));
-	} else {
-		memcpy(data->fan_baseline_bases, mf_fallback_bases,
-		       sizeof(mf_fallback_bases));
-		memcpy(data->fan_baseline_slopes, mf_fallback_slopes,
-		       sizeof(mf_fallback_slopes));
-		dev_warn(&data->pdev->dev,
-			 "EC fan curve unreadable, using factory defaults\n");
+		return;
 	}
+
+	memcpy(data->fan_baseline_bases, mf_fallback_bases,
+	       sizeof(mf_fallback_bases));
+	memcpy(data->fan_baseline_slopes, mf_fallback_slopes,
+	       sizeof(mf_fallback_slopes));
+	dev_warn(data->dev, "EC fan curve unreadable, using factory defaults\n");
 }
 
 /*
- * Reads the 16-bit tachometer counter and calculates live RPM.
- * Uses a 3-byte sample (low/high/low) to verify counter rollover.
+ * Reads the 16-bit tachometer counter and calculates live RPM. Samples the
+ * low byte twice so a counter rollover between reads is detected and retried.
  */
-static int mf_read_fan_rpm(struct minisforum_data *data, u16 addr_lo, u16 addr_hi)
+static int mf_read_fan_rpm(struct minisforum_data *data, u16 addr_lo,
+			   u16 addr_hi, long *rpm)
 {
 	u8 lo1 = 0, hi = 0, lo2 = 0;
 	u32 counter;
-	int attempt;
+	int ret, attempt;
 
 	mutex_lock(&data->lock);
-	mf_sio_enter();
+
+	ret = mf_sio_lock();
+	if (ret)
+		goto out_unlock;
 
 	for (attempt = 0; attempt < 3; attempt++) {
 		mf_sio_sram_read(addr_lo, &lo1);
@@ -193,14 +228,14 @@ static int mf_read_fan_rpm(struct minisforum_data *data, u16 addr_lo, u16 addr_h
 		usleep_range(10, 25);
 	}
 
-	mf_sio_exit();
-	mutex_unlock(&data->lock);
+	mf_sio_unlock();
 
 	counter = lo1 | ((u32)hi << 8);
-	if (counter == 0)
-		return 0;
+	*rpm = counter ? MF_TACH_FREQ_HZ / counter : 0;
 
-	return MF_TACH_FREQ_HZ / counter;
+out_unlock:
+	mutex_unlock(&data->lock);
+	return ret;
 }
 
 /*
@@ -213,12 +248,15 @@ static int mf_read_fan_rpm(struct minisforum_data *data, u16 addr_lo, u16 addr_h
  */
 static int mf_apply_fan_code(struct minisforum_data *data, u8 code)
 {
-	int i;
+	int ret, i;
 
 	code = clamp_val(code, 0, MF_MAX_FAN_CODE);
 
 	mutex_lock(&data->lock);
-	mf_sio_enter();
+
+	ret = mf_sio_lock();
+	if (ret)
+		goto out_unlock;
 
 	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_SLOPE_BASE + i, 0);
@@ -226,12 +264,13 @@ static int mf_apply_fan_code(struct minisforum_data *data, u8 code)
 	for (i = 0; i < MF_FAN_CURVE_BANDS; i++)
 		mf_sio_sram_write(MF_REG_CPU_BASE_START + (i * 3), code);
 
-	mf_sio_exit();
+	mf_sio_unlock();
 
 	data->fan_code = code;
-	mutex_unlock(&data->lock);
 
-	return 0;
+out_unlock:
+	mutex_unlock(&data->lock);
+	return ret;
 }
 
 /*
@@ -264,11 +303,9 @@ static int mf_set_pwm_enable(struct minisforum_data *data, long val)
 		 * fan1_input for the resulting speed.
 		 */
 		data->fan_code = 0;
-		mf_write_curve_table(data, data->fan_baseline_bases,
-				     data->fan_baseline_slopes);
-		dev_dbg(&data->pdev->dev,
-			"CPU fan handed back to EC firmware curve\n");
-		return 0;
+		dev_dbg(data->dev, "CPU fan handed back to EC firmware curve\n");
+		return mf_write_curve_table(data, data->fan_baseline_bases,
+					    data->fan_baseline_slopes);
 
 	default:
 		return -EINVAL;
@@ -300,6 +337,8 @@ static umode_t mf_hwmon_is_visible(const void *drvdata,
 				   enum hwmon_sensor_types type,
 				   u32 attr, int channel)
 {
+	const struct minisforum_data *data = drvdata;
+
 	switch (type) {
 	case hwmon_temp:
 		switch (attr) {
@@ -311,6 +350,10 @@ static umode_t mf_hwmon_is_visible(const void *drvdata,
 		}
 		break;
 	case hwmon_fan:
+		/* Boards with a single tachometer must not expose fan2. */
+		if (channel >= data->board->num_fans)
+			return 0;
+
 		switch (attr) {
 		case hwmon_fan_input:
 		case hwmon_fan_label:
@@ -343,9 +386,6 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	u8 reg, raw = 0;
 	int ret;
 
-	if (!data)
-		return -ENODEV;
-
 	switch (type) {
 	case hwmon_temp:
 		switch (channel) {
@@ -362,7 +402,7 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 			return -EOPNOTSUPP;
 		}
 
-		ret = minisforum_ec_read(reg, &raw);
+		ret = ec_read(reg, &raw);
 		if (ret)
 			return ret;
 
@@ -373,13 +413,11 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	case hwmon_fan:
 		switch (channel) {
 		case 0:
-			*val = mf_read_fan_rpm(data, MF_REG_TACH_CPU_LO,
-					       MF_REG_TACH_CPU_HI);
-			return 0;
+			return mf_read_fan_rpm(data, MF_REG_TACH_CPU_LO,
+					       MF_REG_TACH_CPU_HI, val);
 		case 1:
-			*val = mf_read_fan_rpm(data, MF_REG_TACH_SYS_LO,
-					       MF_REG_TACH_SYS_HI);
-			return 0;
+			return mf_read_fan_rpm(data, MF_REG_TACH_SYS_LO,
+					       MF_REG_TACH_SYS_HI, val);
 		default:
 			return -EOPNOTSUPP;
 		}
@@ -411,9 +449,6 @@ static int mf_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
 			  u32 attr, int channel, long val)
 {
 	struct minisforum_data *data = dev_get_drvdata(dev);
-
-	if (!data)
-		return -ENODEV;
 
 	switch (type) {
 	case hwmon_pwm:
@@ -480,8 +515,10 @@ static const struct hwmon_chip_info mf_chip_info = {
 	.info = mf_hwmon_info,
 };
 
-int minisforum_hwmon_init(struct minisforum_data *data)
+int minisforum_hwmon_init(struct device *dev, struct minisforum_data *data)
 {
+	struct device *hwmon;
+
 	/*
 	 * Remember the firmware's own curve, then leave the EC alone: the fan
 	 * stays under firmware control until userspace explicitly asks for it.
@@ -492,40 +529,36 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 	data->manual_code = 0;
 	data->fan_code = 0;
 
-	data->hwmon_dev = hwmon_device_register_with_info(&data->pdev->dev,
-							  "minisforum",
-							  data,
-							  &mf_chip_info,
-							  NULL);
-	if (IS_ERR(data->hwmon_dev)) {
-		dev_err(&data->pdev->dev, "Failed to register hwmon device: %ld\n",
-			PTR_ERR(data->hwmon_dev));
-		return PTR_ERR(data->hwmon_dev);
-	}
+	hwmon = devm_hwmon_device_register_with_info(dev, "minisforum", data,
+						     &mf_chip_info, NULL);
+	if (IS_ERR(hwmon))
+		return dev_err_probe(dev, PTR_ERR(hwmon),
+				     "failed to register hwmon device\n");
 
-	dev_info(&data->pdev->dev, "HWMON sensors registered\n");
+	dev_info(dev, "hwmon sensors registered\n");
 	return 0;
 }
 
-void minisforum_hwmon_exit(struct minisforum_data *data)
+void minisforum_hwmon_remove(struct minisforum_data *data)
 {
+	int ret;
+
 	/*
 	 * Never leave the fan stuck at a userspace duty: hand it back to the
 	 * firmware curve we snapshotted at probe.
 	 */
-	if (data->pwm_enable != MF_PWM_ENABLE_AUTO)
-		mf_write_curve_table(data, data->fan_baseline_bases,
-				     data->fan_baseline_slopes);
+	if (data->pwm_enable == MF_PWM_ENABLE_AUTO)
+		return;
 
-	if (data->hwmon_dev) {
-		hwmon_device_unregister(data->hwmon_dev);
-		data->hwmon_dev = NULL;
-	}
+	ret = mf_write_curve_table(data, data->fan_baseline_bases,
+				   data->fan_baseline_slopes);
+	if (ret)
+		dev_warn(data->dev, "failed to restore fan curve: %d\n", ret);
 }
 
 /*
  * The EC resets to its own curve across suspend, so a manual duty has to be
- * re-applied (and an automatic one is already what the firmware restores).
+ * re-applied (an automatic one is already what the firmware restores).
  */
 void minisforum_hwmon_resume(struct minisforum_data *data)
 {
