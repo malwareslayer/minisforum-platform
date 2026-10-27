@@ -105,17 +105,49 @@ VRM:          +36.0°C
 pwm1:             22%
 ```
 
-#### Manual PWM Override
+#### Userspace Fan Control (`pwm1_enable`)
+
+The driver follows the standard hwmon ABI, so `fancontrol`, `pwmconfig` and
+CoolerControl can drive the fan directly:
+
+| Attribute | Value | Meaning |
+| :--- | :--- | :--- |
+| `pwm1_enable` | `0` | no control — fan forced to full speed |
+| | `1` | manual — userspace owns `pwm1` |
+| | `2` | **automatic (default)** — in-kernel EMA thermal governor |
+| `pwm1` | `25`–`255` | requested duty (0–100%), writable in manual mode only |
+| `pwm1_mode` | `1` | PWM modulation (read-only) |
+
 ```bash
 HWMON_DIR=$(dirname $(grep -l "minisforum" /sys/class/hwmon/hwmon*/name))
 
-# Lock fan manually (e.g. 25% / ~1300 RPM)
-echo 65 | sudo tee $HWMON_DIR/pwm1
+# Take manual control (e.g. 25% / ~1300 RPM)
+echo 1   | sudo tee $HWMON_DIR/pwm1_enable
+echo 65  | sudo tee $HWMON_DIR/pwm1
 
-# Restore in-kernel dynamic governor (Auto Mode)
-echo 2 | sudo tee $HWMON_DIR/pwm1_enable
+# Hand the fan back to the in-kernel governor
+echo 2   | sudo tee $HWMON_DIR/pwm1_enable
 ```
-*(Hardware safety guard: The EC firmware will automatically override to 100% full speed at $\ge 94^\circ\text{C}$ regardless of manual settings).*
+
+Writing `pwm1` without setting `pwm1_enable=1` first switches to manual mode
+automatically, so tools that write `pwm1` directly also work.
+
+**Integration with `fancontrol` / `pwmconfig` (lm-sensors):**
+```bash
+sudo pwmconfig                      # detects fan1/pwm1 and generates a config
+sudo systemctl enable --now fancontrol
+```
+While `pwm1_enable=1`, the in-kernel EMA governor is suspended and profile
+changes no longer touch the fan. Switch back to `2` to re-enable it.
+
+> **Safety notes**
+> * Manual duty is clamped to a floor of `25` (code 5, ~450–500 RPM): a stray
+>   `echo 0 > pwm1` cannot stop the CPU fan.
+> * The EC firmware keeps its own watchdog and forces full speed at $\ge 94^\circ\text{C}$
+>   regardless of the requested duty; that protection row is never written by
+>   the driver.
+> * Unloading the module restores the factory BIOS fan curve, so the fan never
+>   stays stuck at a manual duty.
 
 ---
 

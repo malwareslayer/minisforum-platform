@@ -21,8 +21,6 @@
 /* IT5571 CPU Fan Curve Lookup Table Addresses (XRAM) */
 #define MF_REG_CPU_BASE_START	0x0310
 #define MF_REG_CPU_SLOPE_BASE	0x08B0
-#define MF_MAX_FAN_CODE		51
-#define MF_HWMON_PWM_MAX	255
 
 /* Factory BIOS Baseline (Restored on module unload) */
 static const u8 mf_bios_baseline_bases[7]  = { 0, 16, 18, 21, 28, 34, 36 };
@@ -233,9 +231,23 @@ static void mf_fan_worker(struct work_struct *work)
 
 	eff_temp = data->temp_ema / 1000;
 
-	/* If manual override is active, do not touch EC fan target */
-	if (data->fan_manual)
+	/*
+	 * Userspace-owned modes are re-asserted on every tick. The EC firmware
+	 * keeps its own fan curve and will happily reclaim the duty registers,
+	 * so writing once and stopping makes pwm1 "drift" back under load.
+	 * Re-writing here is cheap and removes any need to cancel the timer,
+	 * which in turn means no cancel_delayed_work_sync() vs data->lock
+	 * deadlock can ever happen.
+	 */
+	if (data->pwm_enable == MF_PWM_ENABLE_FULL) {
+		mf_apply_fan_code(data, MF_MAX_FAN_CODE);
 		goto reschedule;
+	}
+
+	if (data->pwm_enable == MF_PWM_ENABLE_MANUAL) {
+		mf_apply_fan_code(data, data->manual_code);
+		goto reschedule;
+	}
 
 	/* Determine fan speed target code with continuous gradual interpolation */
 	switch (data->current_profile) {
@@ -327,29 +339,57 @@ int minisforum_hwmon_apply_profile_curve(struct minisforum_data *data,
 	return 0;
 }
 
-static int mf_set_fan_manual(struct minisforum_data *data, bool manual)
+/*
+ * Map the standard pwm1_enable values onto the EC fan registers.
+ * The governor work item is never cancelled, so switching modes cannot
+ * deadlock against data->lock and userspace-requested duty is re-asserted
+ * on every tick (see mf_fan_worker).
+ */
+static int mf_set_pwm_enable(struct minisforum_data *data, long val)
 {
-	if (manual) {
-		u8 code = data->fan_target_code;
+	switch (val) {
+	case MF_PWM_ENABLE_FULL:
+		data->pwm_enable = MF_PWM_ENABLE_FULL;
+		return mf_apply_fan_code(data, MF_MAX_FAN_CODE);
 
-		if (code == 0)
-			code = 5;
-		data->fan_manual = true;
-		return mf_apply_fan_code(data, code);
+	case MF_PWM_ENABLE_MANUAL:
+		/* Start from the duty that is currently programmed: no jump. */
+		if (data->pwm_enable != MF_PWM_ENABLE_MANUAL)
+			data->manual_code = data->fan_target_code;
+		data->pwm_enable = MF_PWM_ENABLE_MANUAL;
+		return mf_apply_fan_code(data, data->manual_code);
+
+	case MF_PWM_ENABLE_AUTO:
+		data->pwm_enable = MF_PWM_ENABLE_AUTO;
+		data->cooldown_timer = 0;
+		mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
+		dev_info(&data->pdev->dev,
+			 "CPU fan control returned to in-kernel thermal governor\n");
+		return 0;
+
+	default:
+		return -EINVAL;
 	}
-
-	data->fan_manual = false;
-	data->cooldown_timer = 0;
-	mod_delayed_work(system_dfl_wq, &data->fan_work, 0);
-	dev_info(&data->pdev->dev, "CPU Fan restored to autonomous dynamic governor\n");
-	return 0;
 }
 
 static int mf_set_fan_pwm(struct minisforum_data *data, long pwm)
 {
-	u8 code = clamp_val(DIV_ROUND_CLOSEST(pwm * MF_MAX_FAN_CODE, MF_HWMON_PWM_MAX),
-			    0, MF_MAX_FAN_CODE);
-	data->fan_manual = true;
+	u8 code = clamp_val(DIV_ROUND_CLOSEST(pwm * MF_MAX_FAN_CODE,
+					      MF_HWMON_PWM_MAX),
+			    MF_MANUAL_MIN_CODE, MF_MAX_FAN_CODE);
+
+	/*
+	 * Writing pwm1 is an explicit request to own the fan. Flip to manual
+	 * instead of returning -EPERM so that tools which write pwm1 before
+	 * touching pwm1_enable (CoolerControl, fan2go, plain scripts) work too.
+	 */
+	if (data->pwm_enable != MF_PWM_ENABLE_MANUAL) {
+		dev_info(&data->pdev->dev,
+			 "pwm1 written: switching CPU fan to manual control\n");
+		data->pwm_enable = MF_PWM_ENABLE_MANUAL;
+	}
+
+	data->manual_code = code;
 	return mf_apply_fan_code(data, code);
 }
 
@@ -381,6 +421,8 @@ static umode_t mf_hwmon_is_visible(const void *drvdata,
 		case hwmon_pwm_input:
 		case hwmon_pwm_enable:
 			return 0644;
+		case hwmon_pwm_mode:
+			return 0444;
 		default:
 			break;
 		}
@@ -446,7 +488,11 @@ static int mf_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 					 0, MF_HWMON_PWM_MAX);
 			return 0;
 		case hwmon_pwm_enable:
-			*val = data->fan_manual ? 1 : 2;
+			*val = data->pwm_enable;
+			return 0;
+		case hwmon_pwm_mode:
+			/* IT5571 drives the fan with a PWM signal, not DC. */
+			*val = 1;
 			return 0;
 		default:
 			return -EOPNOTSUPP;
@@ -472,11 +518,7 @@ static int mf_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
 			val = clamp_val(val, 0, MF_HWMON_PWM_MAX);
 			return mf_set_fan_pwm(data, val);
 		case hwmon_pwm_enable:
-			if (val == 1)
-				return mf_set_fan_manual(data, true);
-			else if (val == 2)
-				return mf_set_fan_manual(data, false);
-			return -EINVAL;
+			return mf_set_pwm_enable(data, val);
 		default:
 			return -EOPNOTSUPP;
 		}
@@ -524,7 +566,8 @@ static const struct hwmon_channel_info * const mf_hwmon_info[] = {
 			   HWMON_F_INPUT | HWMON_F_LABEL,
 			   HWMON_F_INPUT | HWMON_F_LABEL),
 	HWMON_CHANNEL_INFO(pwm,
-			   HWMON_PWM_INPUT | HWMON_PWM_ENABLE),
+			   HWMON_PWM_INPUT | HWMON_PWM_ENABLE |
+			   HWMON_PWM_MODE),
 	NULL
 };
 
@@ -539,8 +582,12 @@ int minisforum_hwmon_init(struct minisforum_data *data)
 	memcpy(data->fan_baseline_bases, mf_bios_baseline_bases, sizeof(mf_bios_baseline_bases));
 	memcpy(data->fan_baseline_slopes, mf_bios_baseline_slopes, sizeof(mf_bios_baseline_slopes));
 
-	/* Default to automatic mode */
-	data->fan_manual = false;
+	/*
+	 * Default to automatic: the in-kernel EMA governor owns the fan, so
+	 * behaviour is unchanged for anyone who never touches sysfs.
+	 */
+	data->pwm_enable = MF_PWM_ENABLE_AUTO;
+	data->manual_code = 6;
 	data->fan_target_code = 6;
 	data->fan_desired_code = 6;
 	data->temp_ema = 0;
