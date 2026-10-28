@@ -2,62 +2,70 @@
 /*
  * Minisforum Platform Driver Core
  *
- * Platform device registration, DMI table matching, and module lifecycle.
+ * DMI matching and platform driver lifecycle.
  */
 
 #include "minisforum.h"
 
-/* Board configuration profiles */
-static const struct minisforum_fan_desc f7bsc_fans[] = {
-	{
-		.label = "CPU Fan",
-		.temp_reg = MF_EC_REG_TEMP_CPU,
-		.profile_reg = MF_EC_REG_CPU_PROFILE,
-	},
-	{
-		.label = "System Fan",
-		.temp_reg = MF_EC_REG_TEMP_BOARD,
-		.profile_reg = 0,
-	},
-};
+/*
+ * Factory fan curve these boards ship with. Only written when the live table
+ * cannot be read at probe, so a failed snapshot still leaves a usable fan.
+ */
+static const u8 mf_um_fallback_bases[MF_FAN_CURVE_BANDS] = { 0, 16, 18, 21, 28, 34, 36 };
+static const u8 mf_um_fallback_slopes[MF_FAN_CURVE_BANDS] = { 0, 10, 33, 58, 60, 16, 200 };
+
+/*
+ * All currently known UM-series boards expose the same EC register layout.
+ * A board whose firmware lays these out differently must not reuse this
+ * macro; give it explicit values so it cannot reach the wrong addresses.
+ */
+#define MF_UM_LAYOUT							\
+	.chip_id		= MF_CHIP_ID_IT5571,			\
+	.sio_port		= 0x2E,					\
+	.ec_temp_cpu		= 0x09,					\
+	.ec_temp_board		= 0x05,					\
+	.ec_temp_vrm		= 0x04,					\
+	.ec_profile		= 0x2F,					\
+	.profile_quiet		= 0x00,					\
+	.profile_balanced	= 0xB1,					\
+	.profile_performance	= 0xB2,					\
+	.xram_curve_base	= 0x0310,				\
+	.xram_curve_slope	= 0x08B0,				\
+	.xram_tach_cpu		= 0x181E,				\
+	.xram_tach_sys		= 0x1820,				\
+	.max_fan_code		= 51,					\
+	.min_fan_code		= 5,					\
+	.fallback_bases		= mf_um_fallback_bases,			\
+	.fallback_slopes	= mf_um_fallback_slopes
 
 static const struct minisforum_board_config board_um790_pro = {
 	.board_name = "F7BSC",
 	.description = "Minisforum UM790 Pro (Venus series)",
-	.chip_id = MF_CHIP_ID_IT5571,
-	.sio_port = MF_SIO_PORT_DEFAULT,
 	.num_fans = 2,
-	.fans = f7bsc_fans,
+	MF_UM_LAYOUT,
 };
 
 static const struct minisforum_board_config board_um780_xtx = {
 	.board_name = "F7BSD",
 	.description = "Minisforum UM780 XTX",
-	.chip_id = MF_CHIP_ID_IT5571,
-	.sio_port = MF_SIO_PORT_DEFAULT,
 	.num_fans = 2,
-	.fans = f7bsc_fans,
+	MF_UM_LAYOUT,
 };
 
 static const struct minisforum_board_config board_um880_pro = {
 	.board_name = "F7BSI",
-	.description = "Minisforum EliteMini UM880 / UM890 Pro",
-	.chip_id = MF_CHIP_ID_IT5571,
-	.sio_port = MF_SIO_PORT_DEFAULT,
+	.description = "Minisforum EliteMini UM880 Pro",
 	.num_fans = 2,
-	.fans = f7bsc_fans,
+	MF_UM_LAYOUT,
 };
 
-static const struct minisforum_board_config board_generic = {
-	.board_name = "Generic",
-	.description = "Generic Minisforum UM-Series Mini-PC",
-	.chip_id = MF_CHIP_ID_IT5571,
-	.sio_port = MF_SIO_PORT_DEFAULT,
-	.num_fans = 1,
-	.fans = f7bsc_fans,
+static const struct minisforum_board_config board_um890_pro = {
+	.board_name = "F7BSW",
+	.description = "Minisforum UM890 Pro",
+	.num_fans = 2,
+	MF_UM_LAYOUT,
 };
 
-/* DMI Matching Table for Auto-Detection */
 static const struct dmi_system_id mf_dmi_table[] = {
 	{
 		.ident = "Minisforum UM790 Pro",
@@ -85,132 +93,109 @@ static const struct dmi_system_id mf_dmi_table[] = {
 		.matches = {
 			DMI_MATCH(DMI_BOARD_NAME, "F7BSW"),
 		},
-		.driver_data = (void *)&board_um880_pro,
+		.driver_data = (void *)&board_um890_pro,
 	},
-	{ } /* Sentinel */
+	{ }
 };
 MODULE_DEVICE_TABLE(dmi, mf_dmi_table);
 
-static struct minisforum_data *mf_data;
-
-/* Safe ACPI EC Read Helper */
-int minisforum_ec_read(u8 addr, u8 *val)
+static int minisforum_probe(struct platform_device *pdev)
 {
-	return ec_read(addr, val);
+	struct device *dev = &pdev->dev;
+	const struct dmi_system_id *dmi_match;
+	struct minisforum_data *data;
+	int ret;
+
+	/* Only bind to hardware whose register layout we actually know. */
+	dmi_match = dmi_first_match(mf_dmi_table);
+	if (!dmi_match)
+		return -ENODEV;
+
+	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	data->dev = dev;
+	data->board = dmi_match->driver_data;
+	platform_set_drvdata(pdev, data);
+
+	ret = devm_mutex_init(dev, &data->lock);
+	if (ret)
+		return ret;
+
+	ret = minisforum_profile_init(dev, data);
+	if (ret)
+		return ret;
+
+	ret = minisforum_hwmon_init(dev, data);
+	if (ret)
+		return ret;
+
+	dev_info(dev, "%s\n", data->board->description);
+	return 0;
 }
 
-/* Safe ACPI EC Write Helper */
-int minisforum_ec_write(u8 addr, u8 val)
+static void minisforum_remove(struct platform_device *pdev)
 {
-	return ec_write(addr, val);
+	/* Never leave the fan stuck at a userspace duty. */
+	minisforum_hwmon_remove(platform_get_drvdata(pdev));
 }
 
-static int minisforum_pm_notify(struct notifier_block *nb,
-				unsigned long action, void *data)
+static int __maybe_unused minisforum_resume(struct device *dev)
 {
-	struct minisforum_data *mf = container_of(nb, struct minisforum_data, pm_nb);
+	struct minisforum_data *data = dev_get_drvdata(dev);
 
-	switch (action) {
-	case PM_POST_SUSPEND:
-	case PM_POST_HIBERNATION:
-	case PM_POST_RESTORE:
-		/*
-		 * The EC resets its profile register and fan curve across
-		 * suspend, so both have to be re-applied on resume.
-		 */
-		minisforum_profile_set(mf, mf->current_profile);
-		minisforum_hwmon_resume(mf);
-		break;
-	default:
-		break;
-	}
+	/*
+	 * The EC resets its profile register and fan curve across suspend,
+	 * so both have to be re-applied on resume. SIMPLE_DEV_PM_OPS also
+	 * covers the hibernation restore path.
+	 */
+	minisforum_profile_set(data, data->current_profile);
+	minisforum_hwmon_resume(data);
 
-	return NOTIFY_OK;
+	/*
+	 * If the firmware refused the re-apply, adopt its value and tell
+	 * userspace so tuned/ppd do not keep showing the old profile.
+	 */
+	minisforum_profile_sync(data);
+
+	return 0;
 }
+
+static DEFINE_SIMPLE_DEV_PM_OPS(minisforum_pm_ops, NULL, minisforum_resume);
+
+static struct platform_driver minisforum_driver = {
+	.probe = minisforum_probe,
+	.remove = minisforum_remove,
+	.driver = {
+		.name = DRV_NAME,
+		.pm = &minisforum_pm_ops,
+	},
+};
+
+static struct platform_device *minisforum_pdev;
 
 static int __init minisforum_init(void)
 {
-	const struct dmi_system_id *dmi_match;
-	const struct minisforum_board_config *board_config = NULL;
-	u8 ec_ver_maj = 0, ec_ver_min = 0;
 	int ret;
 
-	pr_info(DRV_NAME ": Initializing Minisforum Platform Driver v%s\n", DRV_VERSION);
+	minisforum_pdev = platform_device_register_simple(DRV_NAME, -1, NULL, 0);
+	if (IS_ERR(minisforum_pdev))
+		return PTR_ERR(minisforum_pdev);
 
-	/* 1. Check DMI Table */
-	dmi_match = dmi_first_match(mf_dmi_table);
-	if (dmi_match) {
-		board_config = dmi_match->driver_data;
-		pr_info(DRV_NAME ": Detected matched hardware: %s\n", board_config->description);
-	} else {
-		/* Fallback probe: Check if Minisforum EC is present */
-		if (minisforum_ec_read(MF_EC_REG_VER_MAJ, &ec_ver_maj) == 0 &&
-		    minisforum_ec_read(MF_EC_REG_VER_MIN, &ec_ver_min) == 0 &&
-		    ec_ver_maj > 0) {
-			board_config = &board_generic;
-			pr_info(DRV_NAME ": Unlisted board detected with active EC v%u.%u, using generic profile\n",
-				ec_ver_maj, ec_ver_min);
-		} else {
-			pr_warn(DRV_NAME ": No compatible Minisforum hardware detected.\n");
-			return -ENODEV;
-		}
-	}
-
-	/* 2. Allocate driver data */
-	mf_data = kzalloc(sizeof(*mf_data), GFP_KERNEL);
-	if (!mf_data)
-		return -ENOMEM;
-
-	mutex_init(&mf_data->lock);
-	mf_data->board = board_config;
-
-	/* 3. Register Platform Device */
-	mf_data->pdev = platform_device_register_simple(DRV_NAME, -1, NULL, 0);
-	if (IS_ERR(mf_data->pdev)) {
-		ret = PTR_ERR(mf_data->pdev);
-		kfree(mf_data);
+	ret = platform_driver_register(&minisforum_driver);
+	if (ret) {
+		platform_device_unregister(minisforum_pdev);
 		return ret;
 	}
 
-	platform_set_drvdata(mf_data->pdev, mf_data);
-
-	/* 4. Initialize Platform Profile Subsystem */
-	ret = minisforum_profile_init(mf_data);
-	if (ret)
-		pr_warn(DRV_NAME ": Failed to initialize platform_profile (err %d)\n", ret);
-
-	/* 5. Initialize HWMON Subsystem */
-	ret = minisforum_hwmon_init(mf_data);
-	if (ret)
-		pr_warn(DRV_NAME ": Failed to initialize hwmon (err %d)\n", ret);
-
-	/* 6. Register PM Suspend/Resume Notifier */
-	mf_data->pm_nb.notifier_call = minisforum_pm_notify;
-	ret = register_pm_notifier(&mf_data->pm_nb);
-	if (ret)
-		pr_warn(DRV_NAME ": Failed to register PM notifier (err %d)\n", ret);
-
-	pr_info(DRV_NAME ": Minisforum Platform Driver loaded successfully\n");
 	return 0;
 }
 
 static void __exit minisforum_exit(void)
 {
-	if (!mf_data)
-		return;
-
-	unregister_pm_notifier(&mf_data->pm_nb);
-	minisforum_hwmon_exit(mf_data);
-	minisforum_profile_exit(mf_data);
-
-	if (mf_data->pdev)
-		platform_device_unregister(mf_data->pdev);
-
-	mutex_destroy(&mf_data->lock);
-	kfree(mf_data);
-	mf_data = NULL;
-
-	pr_info(DRV_NAME ": Minisforum Platform Driver unloaded\n");
+	platform_driver_unregister(&minisforum_driver);
+	platform_device_unregister(minisforum_pdev);
 }
 
 module_init(minisforum_init);
@@ -218,5 +203,4 @@ module_exit(minisforum_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dwi Mulia Mokoginta <dwi-mulia-mokoginta@protonmail.com>");
-MODULE_DESCRIPTION("Minisforum Linux Platform Driver");
-MODULE_VERSION(DRV_VERSION);
+MODULE_DESCRIPTION("Minisforum platform and hardware monitoring driver");
