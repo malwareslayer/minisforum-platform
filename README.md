@@ -73,11 +73,16 @@ cat /sys/firmware/acpi/platform_profile_choices  # [low-power balanced performan
 echo "balanced" | sudo tee /sys/firmware/acpi/platform_profile
 ```
 
-| Profile | Characteristics |
+| Profile | What it does |
 | :--- | :--- |
-| **`balanced`** | Default profile. Elastic CPU boost up to 5.26 GHz with standard `amd-pstate` scaling; silent ~940 RPM idle fan floor. |
-| **`performance`** | Maximum throughput for gaming and sustained compute workloads; ~1000 RPM base fan floor with aggressive cooling ramp. |
-| **`low-power`** | Eco / quiet profile; inaudible ~600 RPM fan floor with power-optimized thermal targets. |
+| **`balanced`** | Default. Writes the EC's CPU power profile selector; the power envelope stays with the firmware. |
+| **`performance`** | Maximum-throughput selector, for gaming and sustained compute. |
+| **`low-power`** | Eco / quiet selector. |
+
+> These profiles only move the EC selector — they do **not** touch CPU
+> frequency and they do **not** touch the fan. On `amd-pstate` *active* mode
+> EPP is what actually changes behaviour, and the fan belongs to userspace.
+> Let `tuned` drive both; see *Userspace Fan Control* below.
 
 #### Desktop UI Integration (GNOME / KDE)
 For seamless integration with desktop Power Mode sliders, **`tuned-ppd`** is recommended:
@@ -85,6 +90,8 @@ For seamless integration with desktop Power Mode sliders, **`tuned-ppd`** is rec
 sudo pacman -S tuned tuned-ppd
 sudo systemctl enable --now tuned tuned-ppd
 ```
+The slider then sets `platform_profile` for you, and `tuned` applies the
+matching EPP on top of it.
 
 ---
 
@@ -136,6 +143,13 @@ automatically, so tools that write `pwm1` directly also work.
 sudo pwmconfig                      # detects fan1/pwm1 and generates a config
 sudo systemctl enable --now fancontrol
 ```
+
+> `fancontrol` embeds `hwmonN` in `/etc/fancontrol`, and that number shifts
+> between boots when other devices add hwmon instances, so the config breaks
+> with "Device path of hwmonN has changed". **CoolerControl** finds the device
+> by name instead and is the simpler choice. Note also that `pwmconfig` cannot
+> calibrate `MINSTOP`, because manual duty is clamped and the fan never stops.
+
 While `pwm1_enable=1`, the driver does not touch the fan at all and profile
 changes no longer affect it. In mode `2` the EC firmware owns the curve, so
 `pwm1` reads `0` — use `fan1_input` for the actual speed.
