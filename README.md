@@ -21,13 +21,22 @@ A modular Linux kernel platform and hardware monitoring driver for Minisforum Mi
 | Model | Board Model | APU / Processor | Status |
 | :--- | :--- | :--- | :--- |
 | **Minisforum UM790 Pro** | `F7BSC` | AMD Ryzen 9 7940HS | Verified |
-| **Minisforum UM780 XTX** | `F7BSD` | AMD Ryzen 7 7840HS | Supported |
-| **Minisforum UM880 Pro** | `F7BSI` | AMD Ryzen 7 8845HS | Supported |
-| **Minisforum UM890 Pro** | `F7BSW` | AMD Ryzen 9 8945HS | Supported |
-| **Other AMD UM-Series** | *F7BSx* | Phoenix / Hawk Point | Experimental (`force_load=1`) |
+| **Minisforum UM780 XTX** | `F7BSD` | AMD Ryzen 7 7840HS | Untested |
+| **Minisforum UM880 Pro** | `F7BSI` | AMD Ryzen 7 8845HS | Untested |
+| **Minisforum UM890 Pro** | `F7BSW` | AMD Ryzen 9 8945HS | Untested |
 
 > [!NOTE]
-> Intel-based models (MS-01, NPB series) and dual-blower dGPU models (HX99G, Neptune series) use entirely different EC architectures and are not supported.
+> Only `F7BSC` has actually been tested. The other DMI entries assume the same
+> EC register layout, so the driver binds to them, but nobody has run them.
+>
+> Adding a board is **not** just a DMI entry. Every register address — EC
+> temperature registers, the profile selector, the XRAM fan curve and the
+> tachometers — is a hardcoded `#define`. A board whose EC firmware lays them
+> out differently would be driven with the wrong addresses, so it needs a
+> register layout in `minisforum_board_config` first.
+>
+> Intel-based models (MS-01, NPB series) and dual-blower dGPU models (HX99G,
+> Neptune series) use entirely different EC architectures and are not supported.
 
 ---
 
