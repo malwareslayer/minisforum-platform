@@ -29,11 +29,12 @@ A modular Linux kernel platform and hardware monitoring driver for Minisforum Mi
 > Only `F7BSC` has actually been tested. The other DMI entries assume the same
 > EC register layout, so the driver binds to them, but nobody has run them.
 >
-> Adding a board is **not** just a DMI entry. Every register address — EC
-> temperature registers, the profile selector, the XRAM fan curve and the
-> tachometers — is a hardcoded `#define`. A board whose EC firmware lays them
-> out differently would be driven with the wrong addresses, so it needs a
-> register layout in `minisforum_board_config` first.
+> Adding a board means adding one entry to `minisforum_board_config`, which
+> carries the whole EC layout: temperature registers, profile selector values,
+> XRAM fan curve location, tachometers, duty range and the factory fallback
+> curve. A board whose firmware lays these out differently gets its own values
+> instead of being driven through the wrong addresses. There are no module
+> parameters — binding is DMI only.
 >
 > Intel-based models (MS-01, NPB series) and dual-blower dGPU models (HX99G,
 > Neptune series) use entirely different EC architectures and are not supported.
