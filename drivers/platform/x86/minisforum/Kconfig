@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config MINISFORUM_PLATFORM
+	tristate "Minisforum UM series platform and hardware monitoring driver"
+	depends on ACPI_EC
+	depends on DMI
+	select ACPI_PLATFORM_PROFILE
+	select HWMON
+	help
+	  Driver for the Minisforum UM series mini-PCs, whose thermal and
+	  power controls are implemented by an ITE IT5571 Embedded
+	  Controller.
+
+	  Provides the ACPI platform profile interface and hardware monitoring
+	  of board temperatures, fan speeds and PWM fan control.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called minisforum_platform.
