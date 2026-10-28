@@ -122,6 +122,12 @@ static int __maybe_unused minisforum_resume(struct device *dev)
 	minisforum_profile_set(data, data->current_profile);
 	minisforum_hwmon_resume(data);
 
+	/*
+	 * If the firmware refused the re-apply, adopt its value and tell
+	 * userspace so tuned/ppd do not keep showing the old profile.
+	 */
+	minisforum_profile_sync(data);
+
 	return 0;
 }
 

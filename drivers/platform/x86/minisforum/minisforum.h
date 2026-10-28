@@ -76,6 +76,7 @@ struct minisforum_board_config {
 
 struct minisforum_data {
 	struct device *dev;
+	struct device *pp_dev;
 	const struct minisforum_board_config *board;
 	enum platform_profile_option current_profile;
 	struct mutex lock; /* Serializes EC access and protects the fields below */
@@ -90,6 +91,7 @@ struct minisforum_data {
 int minisforum_profile_init(struct device *dev, struct minisforum_data *data);
 int minisforum_profile_set(struct minisforum_data *data,
 			   enum platform_profile_option profile);
+void minisforum_profile_sync(struct minisforum_data *data);
 
 int minisforum_hwmon_init(struct device *dev, struct minisforum_data *data);
 void minisforum_hwmon_remove(struct minisforum_data *data);

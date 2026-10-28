@@ -32,37 +32,99 @@ static int mf_profile_get(struct device *dev,
 	return 0;
 }
 
-int minisforum_profile_set(struct minisforum_data *data,
-			   enum platform_profile_option profile)
+static enum platform_profile_option mf_ec_to_profile(u8 ec_code)
 {
-	u8 ec_code;
-	int ret;
+	switch (ec_code) {
+	case MF_EC_PROFILE_QUIET:
+		return PLATFORM_PROFILE_LOW_POWER;
+	case MF_EC_PROFILE_PERFORMANCE:
+		return PLATFORM_PROFILE_PERFORMANCE;
+	case MF_EC_PROFILE_BALANCED:
+	default:
+		return PLATFORM_PROFILE_BALANCED;
+	}
+}
 
+static int mf_profile_to_ec(enum platform_profile_option profile, u8 *ec_code)
+{
 	switch (profile) {
 	case PLATFORM_PROFILE_LOW_POWER:
-		ec_code = MF_EC_PROFILE_QUIET;
-		break;
+		*ec_code = MF_EC_PROFILE_QUIET;
+		return 0;
 	case PLATFORM_PROFILE_BALANCED:
-		ec_code = MF_EC_PROFILE_BALANCED;
-		break;
+		*ec_code = MF_EC_PROFILE_BALANCED;
+		return 0;
 	case PLATFORM_PROFILE_PERFORMANCE:
-		ec_code = MF_EC_PROFILE_PERFORMANCE;
-		break;
+		*ec_code = MF_EC_PROFILE_PERFORMANCE;
+		return 0;
 	default:
 		return -EOPNOTSUPP;
 	}
+}
 
-	mutex_lock(&data->lock);
-	ret = ec_write(MF_EC_REG_CPU_PROFILE, ec_code);
-	if (!ret)
-		data->current_profile = profile;
-	mutex_unlock(&data->lock);
+int minisforum_profile_set(struct minisforum_data *data,
+			   enum platform_profile_option profile)
+{
+	u8 ec_code, readback;
+	int ret;
 
+	ret = mf_profile_to_ec(profile, &ec_code);
 	if (ret)
 		return ret;
 
-	dev_dbg(data->dev, "platform profile set to %d\n", profile);
-	return 0;
+	mutex_lock(&data->lock);
+
+	ret = ec_write(MF_EC_REG_CPU_PROFILE, ec_code);
+	if (ret)
+		goto out_unlock;
+
+	data->current_profile = profile;
+
+	/*
+	 * A successful ec_write() only means the ACPI transaction completed.
+	 * Read the selector back so a firmware that quietly ignores the
+	 * request shows up in the log instead of silently doing nothing.
+	 */
+	if (!ec_read(MF_EC_REG_CPU_PROFILE, &readback) && readback != ec_code)
+		dev_warn(data->dev,
+			 "EC kept profile 0x%02x, requested 0x%02x\n",
+			 readback, ec_code);
+
+out_unlock:
+	mutex_unlock(&data->lock);
+	return ret;
+}
+
+/*
+ * Re-read the selector from the EC and tell userspace when it no longer
+ * matches what the kernel believes. The EC resets this register across
+ * suspend and firmware may override it on its own; without the notification
+ * tuned/ppd and the desktop power slider keep displaying a stale value.
+ */
+void minisforum_profile_sync(struct minisforum_data *data)
+{
+	enum platform_profile_option profile;
+	u8 ec_code;
+
+	mutex_lock(&data->lock);
+
+	if (ec_read(MF_EC_REG_CPU_PROFILE, &ec_code))
+		goto out_unlock;
+
+	profile = mf_ec_to_profile(ec_code);
+	if (profile == data->current_profile)
+		goto out_unlock;
+
+	data->current_profile = profile;
+	mutex_unlock(&data->lock);
+
+	dev_info(data->dev, "EC profile is now %d, notifying userspace\n",
+		 profile);
+	platform_profile_notify(data->pp_dev);
+	return;
+
+out_unlock:
+	mutex_unlock(&data->lock);
 }
 
 static int mf_profile_set(struct device *dev,
@@ -79,30 +141,18 @@ static const struct platform_profile_ops mf_profile_ops = {
 
 int minisforum_profile_init(struct device *dev, struct minisforum_data *data)
 {
-	u8 initial_ec_profile = 0;
-	struct device *pp_dev;
+	u8 initial_ec_profile = MF_EC_PROFILE_BALANCED;
 
-	if (!ec_read(MF_EC_REG_CPU_PROFILE, &initial_ec_profile)) {
-		switch (initial_ec_profile) {
-		case MF_EC_PROFILE_QUIET:
-			data->current_profile = PLATFORM_PROFILE_LOW_POWER;
-			break;
-		case MF_EC_PROFILE_PERFORMANCE:
-			data->current_profile = PLATFORM_PROFILE_PERFORMANCE;
-			break;
-		case MF_EC_PROFILE_BALANCED:
-		default:
-			data->current_profile = PLATFORM_PROFILE_BALANCED;
-			break;
-		}
-	} else {
-		data->current_profile = PLATFORM_PROFILE_BALANCED;
-	}
+	/* Report whatever the firmware is actually doing, not an assumption. */
+	if (ec_read(MF_EC_REG_CPU_PROFILE, &initial_ec_profile))
+		initial_ec_profile = MF_EC_PROFILE_BALANCED;
 
-	pp_dev = devm_platform_profile_register(dev, "minisforum", data,
-						&mf_profile_ops);
-	if (IS_ERR(pp_dev))
-		return dev_err_probe(dev, PTR_ERR(pp_dev),
+	data->current_profile = mf_ec_to_profile(initial_ec_profile);
+
+	data->pp_dev = devm_platform_profile_register(dev, "minisforum", data,
+						      &mf_profile_ops);
+	if (IS_ERR(data->pp_dev))
+		return dev_err_probe(dev, PTR_ERR(data->pp_dev),
 				     "failed to register platform profile\n");
 
 	return 0;
