@@ -123,14 +123,37 @@ static int minisforum_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	ret = minisforum_profile_init(dev, data);
+	if (ret)
+		return ret;
+
 	dev_info(dev, "%s\n", data->board->description);
 	return 0;
 }
+
+static int __maybe_unused minisforum_resume(struct device *dev)
+{
+	struct minisforum_data *data = dev_get_drvdata(dev);
+
+	/* The EC resets its profile register across suspend. */
+	minisforum_profile_set(data, data->current_profile);
+
+	/*
+	 * If the firmware refused the re-apply, adopt its value and tell
+	 * userspace so tuned/ppd do not keep showing the old profile.
+	 */
+	minisforum_profile_sync(data);
+
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(minisforum_pm_ops, NULL, minisforum_resume);
 
 static struct platform_driver minisforum_driver = {
 	.probe = minisforum_probe,
 	.driver = {
 		.name = DRV_NAME,
+		.pm = &minisforum_pm_ops,
 	},
 };
 
