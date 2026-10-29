@@ -3,7 +3,7 @@
 _pkgname=minisforum-platform
 _modname=minisforum_platform
 pkgname=minisforum-platform-dkms
-pkgver=0.3.4
+pkgver=0.4.1
 pkgrel=1
 pkgdesc="Linux platform & hardware monitoring driver for Minisforum UM790 Pro (Venus series) with ACPI platform profile and EC fan control"
 arch=('x86_64')
@@ -14,7 +14,7 @@ optdepends=('tuned-ppd: recommended daemon for seamless GNOME/KDE desktop power 
 provides=("${_modname}")
 conflicts=("${_modname}")
 source=("${url}/releases/download/v${pkgver}/${_pkgname}-v${pkgver}.tar.gz")
-sha256sums=('389ea180575f47a6cecb364ad75222909026e3d8cf878400694a558e52872453')
+sha256sums=('17c28c6a8b10325064485b8535268e58b764a7de677b9bfa1a38ff6ca30809f0')
 
 prepare() {
   cd "${_pkgname}-v${pkgver}"
