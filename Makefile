@@ -6,7 +6,7 @@ KVERSION ?= $(shell uname -r)
 KDIR ?= /lib/modules/$(KVERSION)/build
 PWD := $(shell pwd)
 
-VERSION := 0.3.4
+VERSION := 0.4.1
 DKMS_DIR := /usr/src/$(MODULE_NAME)-$(VERSION)
 
 .PHONY: all modules clean install load unload dkms-install dkms-uninstall deb
@@ -31,6 +31,8 @@ unload:
 	sudo rmmod $(MODULE_NAME)
 
 dkms-install: clean
+	-dkms remove -m $(MODULE_NAME) -v $(VERSION) --all
+	rm -rf $(DKMS_DIR)
 	mkdir -p $(DKMS_DIR)
 	cp -r Makefile dkms.conf src $(DKMS_DIR)/
 	dkms add -m $(MODULE_NAME) -v $(VERSION)
